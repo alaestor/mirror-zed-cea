@@ -1,0 +1,11 @@
+name = "Cheat Engine Auto Assembler"
+grammar = "cea"
+path_suffixes = ["cea"]
+line_comments = ["// "]
+tab_size = 2
+hard_tabs = false
+
+brackets = [
+  { start = "(", end = ")", close = true, newline = false },
+  { start = "[", end = "]", close = true, newline = false },
+]
