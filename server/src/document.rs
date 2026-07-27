@@ -12,6 +12,12 @@ pub struct Document {
     tree: Tree,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LuaVirtualDocument {
+    pub source: String,
+    pub ranges: Vec<Range>,
+}
+
 impl Document {
     pub fn parse(source: String) -> Result<Self, String> {
         let mut parser = Parser::new();
@@ -35,6 +41,44 @@ impl Document {
         let mut symbols = Vec::new();
         collect_symbols(self.tree.root_node(), &self.source, &mut symbols);
         symbols
+    }
+
+    pub fn lua_virtual_document(&self) -> LuaVirtualDocument {
+        let mut byte_ranges = Vec::new();
+        collect_lua_chunks(self.tree.root_node(), &mut byte_ranges);
+        byte_ranges.sort_by_key(|range| range.start);
+
+        let ranges = byte_ranges
+            .iter()
+            .filter_map(|range| {
+                self.tree
+                    .root_node()
+                    .descendant_for_byte_range(range.start, range.end)
+            })
+            .map(|node| node_range(node, &self.source))
+            .collect();
+
+        let mut source = String::with_capacity(self.source.len());
+        let mut range_index = 0;
+        for (byte, character) in self.source.char_indices() {
+            while byte_ranges
+                .get(range_index)
+                .is_some_and(|range| byte >= range.end)
+            {
+                range_index += 1;
+            }
+            let in_lua = byte_ranges
+                .get(range_index)
+                .is_some_and(|range| range.contains(&byte));
+
+            if in_lua || matches!(character, '\r' | '\n') {
+                source.push(character);
+            } else {
+                source.extend(std::iter::repeat_n(' ', character.len_utf16()));
+            }
+        }
+
+        LuaVirtualDocument { source, ranges }
     }
 }
 
@@ -78,6 +122,18 @@ fn collect_symbols(node: Node<'_>, source: &str, symbols: &mut Vec<DocumentSymbo
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         collect_symbols(child, source, symbols);
+    }
+}
+
+fn collect_lua_chunks(node: Node<'_>, ranges: &mut Vec<std::ops::Range<usize>>) {
+    if node.kind() == "lua_chunk" {
+        ranges.push(node.byte_range());
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_lua_chunks(child, ranges);
     }
 }
 
@@ -227,5 +283,49 @@ dealloc(storage)
         let position = lsp_position("é😀label:\n", Point::new(0, 6));
 
         assert_eq!(position, Position::new(0, 3));
+    }
+
+    #[test]
+    fn constructs_position_preserving_virtual_lua_document() {
+        let source = "[ENABLE]\r\n{$lua}\r\nlocal café = '😀'\r\n{$asm}\r\nlabel:\r\n";
+        let document = Document::parse(source.into()).unwrap();
+
+        let virtual_document = document.lua_virtual_document();
+
+        assert_eq!(
+            virtual_document.source,
+            "        \r\n      \r\nlocal café = '😀'\r\n      \r\n      \r\n"
+        );
+        assert_eq!(
+            virtual_document.ranges,
+            vec![Range::new(Position::new(2, 0), Position::new(3, 0))]
+        );
+        for (source_line, virtual_line) in source.lines().zip(virtual_document.source.lines()) {
+            assert_eq!(
+                source_line.encode_utf16().count(),
+                virtual_line.encode_utf16().count()
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_multiple_lua_regions_in_one_virtual_document() {
+        let source = "\
+{$lua}
+first()
+{$asm}
+nop
+{$lua}
+second()
+{$asm}
+";
+        let document = Document::parse(source.into()).unwrap();
+
+        let virtual_document = document.lua_virtual_document();
+
+        assert!(virtual_document.source.contains("first()"));
+        assert!(virtual_document.source.contains("second()"));
+        assert!(!virtual_document.source.contains("nop"));
+        assert_eq!(virtual_document.ranges.len(), 2);
     }
 }

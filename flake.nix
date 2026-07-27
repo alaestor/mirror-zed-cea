@@ -55,6 +55,7 @@
           default = pkgs.mkShell {
             packages = [
               self.packages.${system}.cea-language-server
+              pkgs.lua-language-server
               pkgs.nodejs
               pkgs.rustup
               pkgs.tree-sitter

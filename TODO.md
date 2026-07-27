@@ -25,6 +25,10 @@ behavior.
 - Unit and end-to-end stdio protocol tests.
 - Separate `cea-language-server` and `tree-sitter-cea` flake package outputs.
 - Zed extension launcher that resolves `cea-language-server` from `PATH`.
+- Position-preserving virtual documents for embedded Lua regions.
+- Managed LuaLS process with project workspace and `LUA_PATH` configuration.
+- Embedded Lua diagnostics, completion, hover, signature help, definitions,
+  and references with virtual URI translation.
 
 ## Language server
 

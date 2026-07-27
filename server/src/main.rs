@@ -1,5 +1,7 @@
 mod backend;
+mod diagnostics;
 mod document;
+mod lua;
 
 use backend::Backend;
 use tower_lsp::{LspService, Server};

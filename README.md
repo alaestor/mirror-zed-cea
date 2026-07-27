@@ -34,10 +34,18 @@ nix develop -c cargo test --manifest-path server/Cargo.toml
 nix develop -c cargo run --manifest-path server/Cargo.toml
 ```
 
-The server communicates using standard LSP over stdin and stdout. It currently
-supports full-text document synchronization, diagnostics, and document
-symbols. The Zed extension resolves `cea-language-server` from the worktree
-shell's `PATH` and launches it directly.
+The server communicates using standard LSP over stdin and stdout. It supports
+full-text document synchronization, CEA and embedded Lua diagnostics, document
+symbols, Lua completion, hover, signature help, definitions, and references.
+Embedded Lua is proxied to `lua-language-server`, which shares the project
+workspace and can resolve standalone `.lua` and `.d.lua` files. The Zed
+extension resolves `cea-language-server` from the worktree shell's `PATH` and
+launches it directly.
+
+Both `cea-language-server` and `lua-language-server` must be available on
+Zed's `PATH`. Set `CEA_LUA_LANGUAGE_SERVER` to override the LuaLS executable.
+When `LUA_PATH` is present, its module patterns and library roots are forwarded
+to LuaLS.
 
 The root Cargo package is the small Zed WebAssembly extension. The native
 language server remains an independent Cargo package under `server/`.
