@@ -1,0 +1,53 @@
+==================
+Lua sections and mode switches
+==================
+
+{$lua}
+
+if syntaxcheck then return end
+
+[ENABLE]
+local message = [[
+{$lua}
+This remains Lua string content.
+]]
+print(message)
+
+[DISABLE]
+return
+
+{$asm}
+[ENABLE]
+db 01
+
+---
+
+(source_file
+  (empty_line)
+  (lua_section
+    (lua_directive)
+    content: (lua_content
+      (empty_line)
+      (lua_line)
+      (empty_line)
+      (section_header_line
+        (section_header))
+      (lua_line)
+      (lua_line)
+      (lua_line)
+      (lua_line)
+      (lua_line)
+      (empty_line)
+      (section_header_line
+        (section_header))
+      (lua_line)
+      (empty_line))
+    (asm_section
+      (asm_directive_line
+        (asm_directive))
+      (section_header_line
+        (section_header))
+      (operation_line
+        (operation
+          name: (identifier)
+          (number))))))

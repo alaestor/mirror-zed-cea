@@ -1,0 +1,13 @@
+==================
+Unknown and incomplete input remains parseable
+==================
+
+[ENABLE
+@@@ malformed input
+
+---
+
+(source_file
+  (empty_line)
+  (unknown_line)
+  (unknown_line))

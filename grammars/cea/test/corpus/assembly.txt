@@ -1,0 +1,139 @@
+==================
+AA directives and assembly
+==================
+
+{ Example script }
+{$STRICT}
+define(address,Game:Update+10)
+define(bytes,F3 0F 10 45 D8)
+
+[ENABLE]
+assert(address,bytes)
+alloc(newmem,$1000,address)
+label(code)
+label(return)
+
+newmem:
+  movss xmm0,[rbp-28]
+  addsd xmm0,xmm1 // add the new value
+  jmp return
+
+address:
+  jmp newmem
+  nop
+return:
+
+[DISABLE]
+address:
+  db bytes
+dealloc(newmem)
+[module.pointer]+offset:
+  db 00
+
+---
+
+(source_file
+  (empty_line)
+  (block_comment_line
+    (block_comment))
+  (compiler_directive_line
+    (compiler_directive))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier)
+        (identifier)
+        (identifier)
+        (number))))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier)
+        (identifier)
+        (number)
+        (number)
+        (number)
+        (identifier))))
+  (empty_line)
+  (section_header_line
+    (section_header))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier)
+        (identifier))))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier)
+        (number)
+        (identifier))))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier))))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier))))
+  (empty_line)
+  (label_definition_line
+    (label_definition
+      name: (identifier)))
+  (operation_line
+    (operation
+      name: (identifier)
+      (register)
+      (register)
+      (number)))
+  (operation_line
+    (operation
+      name: (identifier)
+      (register)
+      (register))
+    (line_comment))
+  (operation_line
+    (operation
+      name: (identifier)
+      (identifier)))
+  (empty_line)
+  (label_definition_line
+    (label_definition
+      name: (identifier)))
+  (operation_line
+    (operation
+      name: (identifier)
+      (identifier)))
+  (operation_line
+    (operation
+      name: (identifier)))
+  (label_definition_line
+    (label_definition
+      name: (identifier)))
+  (empty_line)
+  (section_header_line
+    (section_header))
+  (label_definition_line
+    (label_definition
+      name: (identifier)))
+  (operation_line
+    (operation
+      name: (identifier)
+      (identifier)))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier))))
+  (address_definition_line
+    (address_definition))
+  (operation_line
+    (operation
+      name: (identifier)
+      (number))))
