@@ -34,31 +34,76 @@ injected ranges to a Lua language server. The generic implementation proposed
 in [zed#46870](https://github.com/zed-industries/zed/pull/46870) was closed
 unmerged.
 
-Instead of maintaining user-visible shadow files, build a CEA language server
-that owns the mixed document and proxies Lua requests to
-`lua-language-server`.
+Build a CEA language server that owns the mixed document and proxies embedded
+Lua requests to its own `lua-language-server` process. Zed's regular Lua
+language server is a separate process and cannot be reused directly.
 
 For each open CEA document, the server should construct a virtual Lua document
 by replacing non-Lua characters with spaces while preserving the original line
 endings. Lua content remains unchanged. This keeps line, column, and UTF-16
 coordinates aligned across the CEA and virtual documents, including documents
-with multiple Lua regions. Virtual documents should use internal `.lua` URIs
-and must never appear in project search or version control.
+with multiple Lua regions.
 
-### Initial milestone
+Give each virtual document a `.lua` URI beside its source `.cea` path so LuaLS
+resolves relative modules as if the embedded code lived in the same directory.
+The URI is an in-memory identity and must never create a user-visible shadow
+file. Translate virtual URIs in LuaLS responses back to their source CEA URIs;
+leave URIs for real `.lua` and `.d.lua` files unchanged so navigation opens the
+real files.
+
+Launch LuaLS with the project directory as its workspace root so embedded Lua
+can resolve symbols from standalone project files, `require` targets, and
+`.d.lua` declaration files. Saved standalone Lua changes are visible to both
+Zed's LuaLS and the CEA server's LuaLS through the filesystem. Unsaved changes
+initially remain local to Zed's separate LuaLS process.
+
+### Lua proxy milestones
+
+#### 1. Session and virtual documents
 
 - Identify Lua regions using the CEA grammar.
-- Start or connect to `lua-language-server`.
-- Forward diagnostics, completion, hover, and signature-help requests within
-  Lua regions.
-- Translate virtual document URIs back to their CEA documents.
-- Ignore Lua requests and diagnostics outside injected Lua ranges.
-- Test LF and CRLF documents, non-ASCII text, malformed mode transitions, and
-  multiple Lua regions.
+- Resolve and start `lua-language-server` from `PATH`.
+- Initialize LuaLS with the project workspace and inherited shell environment.
+- Construct position-preserving virtual Lua documents.
+- Synchronize CEA open, full-text change, and close notifications with LuaLS.
+- Shut down the child process cleanly and surface startup or protocol failures.
 
-Incremental synchronization, rename, code actions, semantic tokens, automatic
-LuaLS installation, and cross-file behavior can follow after the proxy design
-has been validated.
+#### 2. Workspace and module resolution
+
+- Parse `LUA_PATH`, including `?.lua` and `?/init.lua` patterns.
+- Translate module patterns into LuaLS `Lua.runtime.path` configuration.
+- Add external library roots to `Lua.workspace.library`.
+- Index project `.lua` files and `.d.lua` declarations.
+- Preserve the virtual document's source directory for relative module
+  resolution.
+- Test `require` and definition lookup across CEA, project Lua, declaration
+  files, and external `LUA_PATH` libraries.
+
+#### 3. Diagnostics
+
+- Forward LuaLS diagnostics for virtual documents to their source CEA files.
+- Ignore diagnostics outside embedded Lua regions.
+- Clear stale diagnostics when regions change or documents close.
+- Preserve real Lua URIs for related information and definition locations.
+
+#### 4. Interactive language features
+
+- Forward completion, completion resolution, hover, and signature help inside
+  Lua regions.
+- Forward definition, declaration, type-definition, implementation, and
+  reference requests where URI and edit mapping are reliable.
+- Reject Lua requests made outside embedded regions.
+
+#### 5. Hardening and later capabilities
+
+- Test LF and CRLF documents, non-ASCII text, malformed mode transitions,
+  multiple Lua regions, and LuaLS restarts.
+- Define CEA-specific configuration for LuaLS command, workspace libraries,
+  runtime version, and path overrides.
+- Evaluate synchronization of unsaved standalone `.lua` buffers without
+  registering a second competing Lua server in Zed.
+- Add incremental synchronization, rename, code actions, semantic tokens, and
+  automatic LuaLS installation only after the proxy design is stable.
 
 ## CEA-aware features
 
