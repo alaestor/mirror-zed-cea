@@ -25,11 +25,15 @@
               pkgs.nodejs
               pkgs.tree-sitter
               pkgs.stdenv.cc
-              wasiCc
             ];
 
             TREE_SITTER = "${pkgs.tree-sitter}/bin/tree-sitter";
             WASI_CLANG = "${wasiCc}/bin/${wasiCc.targetPrefix}cc";
+            WASI_TOOLCHAIN_PATH = pkgs.lib.makeBinPath [
+              wasiCc
+              wasiCc.bintools
+              pkgs.llvmPackages.lld
+            ];
           };
         }
       );
