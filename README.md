@@ -28,6 +28,18 @@ After the grammar commit referenced by `extension.toml` has been pushed:
 Zed uses `grammars/cea` as its private checkout directory while building the
 extension, so the maintained grammar source lives in `grammar/`.
 
+On NixOS, Zed's downloaded WASI compiler may not run because it is a generic
+Linux binary. After the first installation attempt creates Zed's grammar
+checkout, compile the WebAssembly grammar with the native Nix toolchain:
+
+```sh
+nix develop
+npm run build:zed-grammar
+```
+
+Retry `zed: install dev extension`. Zed will use the newer
+`grammars/cea.wasm` instead of invoking its downloaded compiler.
+
 ## Grammar development
 
 The grammar source is under `grammar`. Enter the development shell and run the

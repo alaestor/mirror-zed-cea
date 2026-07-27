@@ -2,6 +2,7 @@
   "name": "zed-cea",
   "private": true,
   "scripts": {
+    "build:zed-grammar": "mkdir -p grammars && ${WASI_CLANG:-clang} -fPIC -shared -Os -nostdlib -Wl,--no-entry -Wl,--export=tree_sitter_cea -o grammars/cea.wasm -I grammar/src grammar/src/parser.c",
     "generate": "cd grammar && ${TREE_SITTER:-tree-sitter} generate",
     "test": "cd grammar && ${TREE_SITTER:-tree-sitter} test"
   },

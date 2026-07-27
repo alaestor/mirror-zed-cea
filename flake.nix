@@ -17,6 +17,7 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          wasiCc = pkgs.pkgsCross.wasi32.stdenv.cc;
         in
         {
           default = pkgs.mkShell {
@@ -24,9 +25,11 @@
               pkgs.nodejs
               pkgs.tree-sitter
               pkgs.stdenv.cc
+              wasiCc
             ];
 
             TREE_SITTER = "${pkgs.tree-sitter}/bin/tree-sitter";
+            WASI_CLANG = "${wasiCc}/bin/${wasiCc.targetPrefix}cc";
           };
         }
       );
