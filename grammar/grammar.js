@@ -19,9 +19,16 @@ module.exports = grammar({
       ),
 
     lua_content: ($) =>
-      repeat1(
-        choice($.section_header_line, $.lua_line, $.empty_line),
+      choice(
+        $.lua_chunk,
+        seq(
+          optional($.lua_chunk),
+          repeat1(seq($.section_header_line, optional($.lua_chunk))),
+        ),
       ),
+
+    lua_chunk: ($) =>
+      repeat1(choice($.lua_line, $.empty_line)),
 
     asm_section: ($) =>
       seq(

@@ -250,7 +250,7 @@
     }
   },
   {
-    "type": "lua_content",
+    "type": "lua_chunk",
     "named": true,
     "fields": {},
     "children": {
@@ -263,6 +263,21 @@
         },
         {
           "type": "lua_line",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "lua_content",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "lua_chunk",
           "named": true
         },
         {

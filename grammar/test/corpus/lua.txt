@@ -27,21 +27,24 @@ db 01
   (lua_section
     (lua_directive)
     content: (lua_content
-      (empty_line)
-      (lua_line)
-      (empty_line)
+      (lua_chunk
+        (empty_line)
+        (lua_line)
+        (empty_line))
       (section_header_line
         (section_header))
-      (lua_line)
-      (lua_line)
-      (lua_line)
-      (lua_line)
-      (lua_line)
-      (empty_line)
+      (lua_chunk
+        (lua_line)
+        (lua_line)
+        (lua_line)
+        (lua_line)
+        (lua_line)
+        (empty_line))
       (section_header_line
         (section_header))
-      (lua_line)
-      (empty_line))
+      (lua_chunk
+        (lua_line)
+        (empty_line)))
     (asm_section
       (asm_directive_line
         (asm_directive))
@@ -51,3 +54,48 @@ db 01
         (operation
           name: (identifier)
           (number))))))
+
+==================
+Multiline Lua remains in one injection chunk
+==================
+
+{$lua}
+if syntaxcheck then return end
+
+[ENABLE]
+local PSTAT = {}
+PSTAT.names = { "hello", "world" }
+for _, name in pairs(PSTAT.names) do
+  print(name)
+end
+
+print("done")
+
+[DISABLE]
+return
+
+---
+
+(source_file
+  (empty_line)
+  (lua_section
+    (lua_directive)
+    content: (lua_content
+      (lua_chunk
+        (lua_line)
+        (empty_line))
+      (section_header_line
+        (section_header))
+      (lua_chunk
+        (lua_line)
+        (lua_line)
+        (lua_line)
+        (lua_line)
+        (lua_line)
+        (empty_line)
+        (lua_line)
+        (empty_line))
+      (section_header_line
+        (section_header))
+      (lua_chunk
+        (lua_line)))))
