@@ -2,8 +2,8 @@
   "name": "zed-cea",
   "private": true,
   "scripts": {
-    "generate": "cd grammars/cea && ${TREE_SITTER:-tree-sitter} generate",
-    "test": "cd grammars/cea && ${TREE_SITTER:-tree-sitter} test"
+    "generate": "cd grammar && ${TREE_SITTER:-tree-sitter} generate",
+    "test": "cd grammar && ${TREE_SITTER:-tree-sitter} test"
   },
   "devDependencies": {
     "tree-sitter-cli": "0.26.11"

@@ -25,14 +25,13 @@ After the grammar commit referenced by `extension.toml` has been pushed:
 3. Select this repository.
 4. Open a `.cea` file.
 
-For unpublished grammar work, temporarily replace the grammar repository in
-`extension.toml` with an absolute `file://` URL to this repository. Do not
-commit that machine-specific URL.
+Zed uses `grammars/cea` as its private checkout directory while building the
+extension, so the maintained grammar source lives in `grammar/`.
 
 ## Grammar development
 
-The grammar source is under `grammars/cea`. Enter the development shell and
-run the tests:
+The grammar source is under `grammar`. Enter the development shell and run the
+tests:
 
 ```sh
 nix develop
