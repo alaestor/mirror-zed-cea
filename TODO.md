@@ -16,6 +16,15 @@ and tools can consume the grammar or language server independently. The
 language server must speak standard LSP over stdio and contain no Zed-specific
 behavior.
 
+## Implemented foundation
+
+- Standalone Rust language server under `server/`.
+- Full-text document synchronization and Tree-sitter parsing.
+- Parse diagnostics with UTF-16-compatible source ranges.
+- Document symbols for sections, labels, allocations, and definitions.
+- Unit and end-to-end stdio protocol tests.
+- Separate `cea-language-server` and `tree-sitter-cea` flake package outputs.
+
 ## Language server
 
 Zed's Tree-sitter injections parse and highlight Lua regions, but Zed does not
@@ -37,7 +46,6 @@ and must never appear in project search or version control.
 
 ### Initial milestone
 
-- Implement LSP initialization and full-text document synchronization.
 - Identify Lua regions using the CEA grammar.
 - Start or connect to `lua-language-server`.
 - Forward diagnostics, completion, hover, and signature-help requests within
@@ -56,8 +64,6 @@ has been validated.
 The language server should eventually provide native CEA intelligence rather
 than acting only as a Lua proxy:
 
-- Document symbols for `[ENABLE]`, `[DISABLE]`, labels, allocations, and
-  definitions.
 - Completion and go-to-definition for known CEA symbols.
 - Diagnostics for duplicate declarations, unresolved symbols, and malformed
   section or mode transitions.
@@ -68,10 +74,6 @@ Assembly language-server integration remains out of scope.
 
 ## Packaging
 
-- Add the server as an independent crate under `server/`.
-- Add flake package outputs for the language server and Tree-sitter grammar,
-  while retaining the existing development shell.
-- Keep grammar and server APIs independent of the Zed extension.
 - Initially allow users to provide `lua-language-server` on `PATH`; automated
   discovery or installation can be added later.
 - Have the Zed extension locate and launch the standalone CEA language server.

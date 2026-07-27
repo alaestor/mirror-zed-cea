@@ -3,3 +3,4 @@ __*
 node_modules/
 result
 /grammars/
+/target/

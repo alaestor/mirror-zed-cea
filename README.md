@@ -1,7 +1,7 @@
 # Cheat Engine Auto Assembler for Zed
 
-Syntax highlighting for Cheat Engine Auto Assembler (`.cea`) scripts, including
-embedded Lua sections.
+Syntax highlighting and initial language-server support for Cheat Engine Auto
+Assembler (`.cea`) scripts, including embedded Lua sections.
 
 ## Features
 
@@ -11,9 +11,36 @@ embedded Lua sections.
   casts, and comments
 - Lua syntax highlighting inside `{$lua}` regions
 - Error-tolerant parsing while scripts are incomplete
+- Document symbols for sections, labels, allocations, and definitions
+- Parser diagnostics for malformed CEA structure
 
-The extension intentionally does not attach an assembly or Lua language server.
-See [TODO.md](TODO.md) for the Lua LSP constraints and possible future designs.
+The standalone CEA language server is editor-independent. Lua language-server
+proxying is not implemented yet, and assembly LSP integration is intentionally
+out of scope. See [TODO.md](TODO.md) for the remaining roadmap.
+
+## Language server
+
+Build or run the language server through the flake:
+
+```sh
+nix build .#cea-language-server
+nix run .#cea-language-server
+```
+
+For development:
+
+```sh
+nix develop -c cargo test --workspace
+nix develop -c cargo run -p cea-language-server
+```
+
+The server communicates using standard LSP over stdin and stdout. It currently
+supports full-text document synchronization, diagnostics, and document
+symbols. Zed launcher integration will be added after the standalone server
+interface has settled.
+
+The flake also exposes the grammar independently as
+`packages.<system>.tree-sitter-cea`.
 
 ## Local installation
 
@@ -50,7 +77,7 @@ nix develop
 npm test
 ```
 
-The shell provides Node.js, Tree-sitter CLI 0.26, and the native compiler
+The shell provides Rust, Node.js, Tree-sitter CLI 0.26, and the native compiler
 toolchain used to build the parser. Run `npm run generate` after changing
 `grammar.js`.
 
