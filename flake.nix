@@ -4,7 +4,7 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       supportedSystems = [
         "aarch64-linux"
@@ -20,8 +20,6 @@
           source = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
-              ./Cargo.lock
-              ./Cargo.toml
               ./grammar/src
               ./server
             ];
@@ -30,9 +28,9 @@
             pname = "cea-language-server";
             version = "0.1.0";
             src = source;
-            cargoLock.lockFile = ./Cargo.lock;
-            cargoBuildFlags = [ "-p=cea-language-server" ];
-            cargoTestFlags = [ "-p=cea-language-server" ];
+            buildAndTestSubdir = "server";
+            cargoRoot = "server";
+            cargoLock.lockFile = ./server/Cargo.lock;
           };
           treeSitterCea = pkgs.tree-sitter.buildGrammar {
             language = "cea";
@@ -56,11 +54,9 @@
         {
           default = pkgs.mkShell {
             packages = [
-              pkgs.cargo
-              pkgs.clippy
+              self.packages.${system}.cea-language-server
               pkgs.nodejs
-              pkgs.rustc
-              pkgs.rustfmt
+              pkgs.rustup
               pkgs.tree-sitter
               pkgs.stdenv.cc
             ];

@@ -24,6 +24,7 @@ behavior.
 - Document symbols for sections, labels, allocations, and definitions.
 - Unit and end-to-end stdio protocol tests.
 - Separate `cea-language-server` and `tree-sitter-cea` flake package outputs.
+- Zed extension launcher that resolves `cea-language-server` from `PATH`.
 
 ## Language server
 
@@ -76,7 +77,8 @@ Assembly language-server integration remains out of scope.
 
 - Initially allow users to provide `lua-language-server` on `PATH`; automated
   discovery or installation can be added later.
-- Have the Zed extension locate and launch the standalone CEA language server.
+- Keep the standalone CEA language server available on `PATH` when launching
+  Zed.
 
 Separate repositories may be considered if the components develop independent
 release cycles or external consumers make that useful. Repository separation is

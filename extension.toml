@@ -10,3 +10,7 @@ repository = "https://codeberg.org/alaestor/zed-cea"
 repository = "https://codeberg.org/alaestor/zed-cea.git"
 commit = "5f4554e6767d801ce06fd2bff581bdef98b6fb82"
 path = "grammars/cea"
+
+[language_servers.cea-language-server]
+name = "CEA Language Server"
+languages = ["Cheat Engine Auto Assembler"]

@@ -4,3 +4,5 @@ node_modules/
 result
 /grammars/
 /target/
+server/target/
+/extension.wasm

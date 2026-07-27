@@ -30,14 +30,28 @@ nix run .#cea-language-server
 For development:
 
 ```sh
-nix develop -c cargo test --workspace
-nix develop -c cargo run -p cea-language-server
+nix develop -c cargo test --manifest-path server/Cargo.toml
+nix develop -c cargo run --manifest-path server/Cargo.toml
 ```
 
 The server communicates using standard LSP over stdin and stdout. It currently
 supports full-text document synchronization, diagnostics, and document
-symbols. Zed launcher integration will be added after the standalone server
-interface has settled.
+symbols. The Zed extension resolves `cea-language-server` from the worktree
+shell's `PATH` and launches it directly.
+
+The root Cargo package is the small Zed WebAssembly extension. The native
+language server remains an independent Cargo package under `server/`.
+
+The development shell includes `cea-language-server` on `PATH`. Launching Zed
+from that shell makes the server available to the extension:
+
+```sh
+nix develop -c rustup toolchain install stable --profile minimal
+nix develop -c zeditor .
+```
+
+Zed uses `rustup` to install the `wasm32-wasip2` target when compiling the
+extension, so a rustup-managed default toolchain must exist.
 
 The flake also exposes the grammar independently as
 `packages.<system>.tree-sitter-cea`.
