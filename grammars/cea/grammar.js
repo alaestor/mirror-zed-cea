@@ -6,6 +6,7 @@ module.exports = grammar({
   word: ($) => $.identifier,
 
   rules: {
+    // Recursive sections make the current {$lua}/{$asm} mode unambiguous.
     source_file: ($) =>
       seq(repeat($._asm_line), optional($.lua_section)),
 
@@ -119,6 +120,7 @@ module.exports = grammar({
         $._newline,
       ),
 
+    // Keep operation names open-ended: CE accepts extensions and new mnemonics.
     operation: ($) =>
       prec(
         1,
