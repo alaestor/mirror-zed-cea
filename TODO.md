@@ -144,15 +144,15 @@ advertised its own capabilities. Lua regions retain Tree-sitter highlighting.
 
 ### 3. Validate cross-file behavior
 
-- [ ] Add integration fixtures for CEA references into project `.lua` files,
+- [x] Add integration fixtures for CEA references into project `.lua` files,
   `.d.lua` declarations, `require` targets, and external `LUA_PATH` libraries.
-- [ ] Cover both `?.lua` and `?/init.lua` module layouts.
+- [x] Cover both `?.lua` and `?/init.lua` module layouts.
 - [x] Resolve relative `LUA_PATH` roots against the workspace.
 - [x] Implement Lua's empty `;;` default-path semantics.
-- [ ] Test multiple CEA files sharing Lua declarations.
-- [ ] Expand coverage for LF, CRLF, non-ASCII text, malformed mode transitions,
+- [x] Test multiple CEA files sharing Lua declarations.
+- [x] Expand coverage for LF, CRLF, non-ASCII text, malformed mode transitions,
   and multiple embedded Lua regions.
-- [ ] Document that saved standalone Lua changes are visible through the
+- [x] Document that saved standalone Lua changes are visible through the
   filesystem while unsaved changes remain isolated in Zed's separate LuaLS
   process.
 

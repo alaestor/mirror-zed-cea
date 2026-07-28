@@ -7,6 +7,7 @@ use std::{
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tower_lsp::lsp_types::Url;
 
 fn send(writer: &mut impl Write, message: Value) {
     let body = message.to_string();
@@ -39,6 +40,18 @@ fn receive_matching(reader: &mut impl BufRead, predicate: impl Fn(&Value) -> boo
             return message;
         }
     }
+}
+
+fn definition_uri(response: &Value) -> Option<&str> {
+    response["result"]
+        .get(0)
+        .and_then(|location| location.get("uri").or_else(|| location.get("targetUri")))
+        .or_else(|| {
+            response["result"]
+                .get("uri")
+                .or_else(|| response["result"].get("targetUri"))
+        })
+        .and_then(Value::as_str)
 }
 
 #[test]
@@ -311,16 +324,8 @@ fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
         }),
     );
     let definition = receive_matching(&mut stdout, |message| message["id"] == 3);
-    let definition_uri = definition["result"]
-        .get(0)
-        .and_then(|location| location.get("uri").or_else(|| location.get("targetUri")))
-        .or_else(|| {
-            definition["result"]
-                .get("uri")
-                .or_else(|| definition["result"].get("targetUri"))
-        });
     assert_eq!(
-        definition_uri.and_then(Value::as_str),
+        definition_uri(&definition),
         Some("file:///tmp/cea-lsp-proxy-test/proxy-fixture.cea")
     );
 
@@ -344,6 +349,167 @@ fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
     drop(stdin);
 
     assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn resolves_definitions_across_workspace_and_lua_path_fixtures() {
+    if !command_exists("lua-language-server") {
+        eprintln!("skipping Lua proxy integration test: lua-language-server is not on PATH");
+        return;
+    }
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture_dir = env::temp_dir().join(format!(
+        "cea-luals-cross-file-{}-{nonce}",
+        std::process::id()
+    ));
+    let nested_dir = fixture_dir.join("nested");
+    let declarations_dir = fixture_dir.join("types");
+    let external_dir = fixture_dir.join("external");
+    fs::create_dir_all(&nested_dir).unwrap();
+    fs::create_dir_all(&declarations_dir).unwrap();
+    fs::create_dir_all(&external_dir).unwrap();
+    fs::write(
+        fixture_dir.join("direct.lua"),
+        "return { direct_value = 1 }\n",
+    )
+    .unwrap();
+    fs::write(nested_dir.join("init.lua"), "return { nested_value = 2 }\n").unwrap();
+    fs::write(
+        declarations_dir.join("globals.d.lua"),
+        "function declared_helper() end\n",
+    )
+    .unwrap();
+    fs::write(
+        external_dir.join("outside.lua"),
+        "return { outside_value = 3 }\n",
+    )
+    .unwrap();
+
+    let workspace_uri = Url::from_directory_path(&fixture_dir).unwrap().to_string();
+    let first_uri = Url::from_file_path(fixture_dir.join("first.cea"))
+        .unwrap()
+        .to_string();
+    let second_uri = Url::from_file_path(fixture_dir.join("second.cea"))
+        .unwrap()
+        .to_string();
+    let direct_uri = Url::from_file_path(fixture_dir.join("direct.lua"))
+        .unwrap()
+        .to_string();
+    let nested_uri = Url::from_file_path(nested_dir.join("init.lua"))
+        .unwrap()
+        .to_string();
+    let declaration_uri = Url::from_file_path(declarations_dir.join("globals.d.lua"))
+        .unwrap()
+        .to_string();
+    let external_uri = Url::from_file_path(external_dir.join("outside.lua"))
+        .unwrap()
+        .to_string();
+    let lua_path = format!("?.lua;?/init.lua;{}", external_dir.join("?.lua").display());
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
+        .env("LUA_PATH", lua_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "capabilities": {},
+                "processId": null,
+                "rootUri": workspace_uri
+            }
+        }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+    receive_matching(&mut stdout, |message| {
+        message["method"] == "window/logMessage"
+            && message["params"]["message"] == "Lua language server proxy initialized"
+    });
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": first_uri,
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": "{$lua}\nfunction shared_from_cea() return 4 end\n{$asm}\n"
+                }
+            }
+        }),
+    );
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": second_uri,
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": "{$lua}\nlocal direct = require('direct')\nlocal nested = require('nested')\nlocal outside = require('outside')\ndeclared_helper()\nshared_from_cea()\n{$asm}\n"
+                }
+            }
+        }),
+    );
+
+    for (id, line, character, expected_uri) in [
+        (10, 1, 24, direct_uri.as_str()),
+        (11, 2, 24, nested_uri.as_str()),
+        (12, 3, 25, external_uri.as_str()),
+        (13, 4, 2, declaration_uri.as_str()),
+        (14, 5, 2, first_uri.as_str()),
+    ] {
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "textDocument/definition",
+                "params": {
+                    "textDocument": { "uri": second_uri },
+                    "position": { "line": line, "character": character }
+                }
+            }),
+        );
+        let definition = receive_matching(&mut stdout, |message| message["id"] == id);
+        assert_eq!(
+            definition_uri(&definition),
+            Some(expected_uri),
+            "unexpected definition response: {definition}"
+        );
+    }
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 20, "method": "shutdown", "params": null }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 20);
+    send(&mut stdin, json!({ "jsonrpc": "2.0", "method": "exit" }));
+    drop(stdin);
+
+    assert!(child.wait().unwrap().success());
+    fs::remove_dir_all(fixture_dir).unwrap();
 }
 
 #[test]

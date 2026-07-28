@@ -43,6 +43,10 @@ workspace and can resolve standalone `.lua` and `.d.lua` files. The Zed
 extension resolves `cea-language-server` from the worktree shell's `PATH` and
 launches it directly.
 
+Saved standalone Lua changes become visible to the CEA server through the
+filesystem. Unsaved standalone Lua edits remain isolated in Zed's separate
+LuaLS process until they are saved.
+
 Both `cea-language-server` and `lua-language-server` must be available on
 Zed's `PATH`. Set `CEA_LUA_LANGUAGE_SERVER` to override the LuaLS executable.
 When `LUA_PATH` is present, its module patterns and library roots are forwarded
