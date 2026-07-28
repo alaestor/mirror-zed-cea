@@ -119,13 +119,13 @@ before expanding the feature surface.
 - [x] Restart LuaLS after an unexpected exit and resynchronize open virtual
   documents.
 - [x] Forward request cancellation and discard abandoned pending responses.
-- [ ] Handle LuaLS client requests deliberately, especially
+- [x] Handle LuaLS client requests deliberately, especially
   `workspace/configuration` and dynamic capability registration.
-- [ ] Translate CEA document URIs in diagnostic related information, nested
+- [x] Translate CEA document URIs in diagnostic related information, nested
   response fields, workspace edits, and other URI-bearing payloads.
-- [ ] Support all workspace folders instead of selecting only the first.
-- [ ] Ensure virtual text is never written back to the source `.cea` file.
-- [ ] Improve request timeout, child-process, and protocol error reporting.
+- [x] Support all workspace folders instead of selecting only the first.
+- [x] Ensure virtual text is never written back to the source `.cea` file.
+- [x] Improve request timeout, child-process, and protocol error reporting.
 
 ### 2. Complete Lua feature forwarding
 

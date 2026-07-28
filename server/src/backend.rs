@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
         CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbolParams,
-        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, Location,
-        MessageType, OneOf, ReferenceParams, ServerCapabilities, ServerInfo, SignatureHelp,
-        SignatureHelpOptions, SignatureHelpParams, TextDocumentSyncCapability,
-        TextDocumentSyncKind, Url,
+        DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
+        Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+        InitializedParams, Location, MessageType, OneOf, ReferenceParams, ServerCapabilities,
+        ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+        TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkspaceFolder,
+        WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
     },
     Client, LanguageServer,
 };
@@ -27,7 +28,7 @@ pub struct Backend {
     diagnostics: DiagnosticPublisher,
     documents: RwLock<HashMap<Url, OpenDocument>>,
     lua: RwLock<Option<LuaProxy>>,
-    workspace_uri: RwLock<Option<Url>>,
+    workspace_folders: Arc<RwLock<Vec<WorkspaceFolder>>>,
 }
 
 impl Backend {
@@ -38,7 +39,7 @@ impl Backend {
             diagnostics,
             documents: RwLock::new(HashMap::new()),
             lua: RwLock::new(None),
-            workspace_uri: RwLock::new(None),
+            workspace_folders: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -76,11 +77,23 @@ impl Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         #[allow(deprecated)]
-        let workspace_uri = params
-            .workspace_folders
-            .and_then(|folders| folders.into_iter().next().map(|folder| folder.uri))
-            .or(params.root_uri);
-        *self.workspace_uri.write().await = workspace_uri;
+        let workspace_folders = params.workspace_folders.unwrap_or_else(|| {
+            params
+                .root_uri
+                .map(|uri| {
+                    vec![WorkspaceFolder {
+                        name: uri
+                            .path_segments()
+                            .and_then(Iterator::last)
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or("CEA workspace")
+                            .to_owned(),
+                        uri,
+                    }]
+                })
+                .unwrap_or_default()
+        });
+        *self.workspace_folders.write().await = workspace_folders;
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -105,6 +118,13 @@ impl LanguageServer for Backend {
                 }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    ..WorkspaceServerCapabilities::default()
+                }),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -121,7 +141,7 @@ impl LanguageServer for Backend {
         match LuaProxy::start(
             self.client.clone(),
             self.diagnostics.clone(),
-            self.workspace_uri.read().await.clone(),
+            self.workspace_folders.clone(),
         )
         .await
         {
@@ -188,6 +208,30 @@ impl LanguageServer for Backend {
             .await
             .remove(&params.text_document.uri);
         self.diagnostics.clear(params.text_document.uri).await;
+    }
+
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        {
+            let mut workspace_folders = self.workspace_folders.write().await;
+            workspace_folders.retain(|folder| {
+                !params
+                    .event
+                    .removed
+                    .iter()
+                    .any(|removed| removed.uri == folder.uri)
+            });
+            for added in &params.event.added {
+                if !workspace_folders
+                    .iter()
+                    .any(|folder| folder.uri == added.uri)
+                {
+                    workspace_folders.push(added.clone());
+                }
+            }
+        }
+        if let Some(lua) = self.lua.read().await.as_ref() {
+            lua.change_workspace_folders(params.event).await;
+        }
     }
 
     async fn document_symbol(

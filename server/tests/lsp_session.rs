@@ -70,6 +70,15 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
         initialize["result"]["capabilities"]["documentSymbolProvider"],
         true
     );
+    assert_eq!(
+        initialize["result"]["capabilities"]["workspace"]["workspaceFolders"]["supported"],
+        true
+    );
+    assert_eq!(
+        initialize["result"]["capabilities"]["workspace"]["workspaceFolders"]
+            ["changeNotifications"],
+        true
+    );
 
     send(
         &mut stdin,
@@ -334,9 +343,7 @@ fn restarts_lua_ls_and_resynchronizes_open_documents() {
     let fixture_dir =
         env::temp_dir().join(format!("cea-luals-restart-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&fixture_dir).unwrap();
-    let fake_lua_ls = fixture_dir.join("fake-lua-language-server");
-    fs::write(&fake_lua_ls, FAKE_RESTARTING_LUA_LS).unwrap();
-    fs::set_permissions(&fake_lua_ls, fs::Permissions::from_mode(0o755)).unwrap();
+    let fake_lua_ls = write_fake_lua_ls(&fixture_dir, FAKE_RESTARTING_LUA_LS);
     let workspace_uri = format!("file://{}", fixture_dir.display());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
@@ -390,6 +397,15 @@ fn restarts_lua_ls_and_resynchronizes_open_documents() {
             }
         }),
     );
+    let failure = receive_matching(&mut stdout, |message| {
+        message["method"] == "window/logMessage"
+            && message["params"]["message"]
+                .as_str()
+                .is_some_and(|message| message.ends_with("; restarting LuaLS"))
+    });
+    let failure_message = failure["params"]["message"].as_str().unwrap();
+    assert!(failure_message.contains("LuaLS stdout closed unexpectedly"));
+    assert!(failure_message.contains("process exited with exit status: 1"));
     let restarted = receive_matching(&mut stdout, |message| {
         message["method"] == "window/logMessage"
             && message["params"]["message"]
@@ -433,9 +449,7 @@ fn forwards_client_request_cancellation_to_lua_ls() {
     let fixture_dir =
         env::temp_dir().join(format!("cea-luals-cancel-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&fixture_dir).unwrap();
-    let fake_lua_ls = fixture_dir.join("fake-lua-language-server");
-    fs::write(&fake_lua_ls, FAKE_CANCELLATION_LUA_LS).unwrap();
-    fs::set_permissions(&fake_lua_ls, fs::Permissions::from_mode(0o755)).unwrap();
+    let fake_lua_ls = write_fake_lua_ls(&fixture_dir, FAKE_CANCELLATION_LUA_LS);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
         .env("CEA_LUA_LANGUAGE_SERVER", &fake_lua_ls)
@@ -542,13 +556,26 @@ fn forwards_client_request_cancellation_to_lua_ls() {
 }
 
 fn command_exists(command: &str) -> bool {
-    env::var_os("PATH").is_some_and(|path| {
-        env::split_paths(&path).any(|directory| Path::new(&directory).join(command).is_file())
+    command_path(command).is_some()
+}
+
+fn command_path(command: &str) -> Option<std::path::PathBuf> {
+    env::var_os("PATH").and_then(|path| {
+        env::split_paths(&path)
+            .map(|directory| Path::new(&directory).join(command))
+            .find(|candidate| candidate.is_file())
     })
 }
 
-const FAKE_RESTARTING_LUA_LS: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
+fn write_fake_lua_ls(fixture_dir: &Path, body: &str) -> std::path::PathBuf {
+    let bash = command_path("bash").expect("bash must be available to run the LuaLS fixture");
+    let fake_lua_ls = fixture_dir.join("fake-lua-language-server");
+    fs::write(&fake_lua_ls, format!("#!{}\n{body}", bash.display())).unwrap();
+    fs::set_permissions(&fake_lua_ls, fs::Permissions::from_mode(0o755)).unwrap();
+    fake_lua_ls
+}
+
+const FAKE_RESTARTING_LUA_LS: &str = r#"set -euo pipefail
 
 state_file="$(dirname "$0")/launch-count"
 launch_count=0
@@ -587,8 +614,7 @@ while IFS= read -r header; do
 done
 "#;
 
-const FAKE_CANCELLATION_LUA_LS: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
+const FAKE_CANCELLATION_LUA_LS: &str = r#"set -euo pipefail
 
 send() {
     local response="$1"
