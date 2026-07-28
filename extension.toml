@@ -1,15 +1,15 @@
 id = "cea"
 name = "Cheat Engine Auto Assembler"
 description = "Syntax highlighting for Cheat Engine Auto Assembler scripts with embedded Lua"
-version = "0.1.0"
+version = "0.2.0"
 schema_version = 1
 authors = ["alaestor"]
 repository = "https://codeberg.org/alaestor/zed-cea"
 
 [grammars.cea]
 repository = "https://codeberg.org/alaestor/zed-cea.git"
-commit = "5f4554e6767d801ce06fd2bff581bdef98b6fb82"
-path = "grammars/cea"
+commit = "ebacc60eecf72195a40c716c54436b3309779f6e"
+path = "grammar"
 
 [language_servers.cea-language-server]
 name = "CEA Language Server"
