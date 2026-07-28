@@ -1,65 +1,32 @@
 # Cheat Engine Auto Assembler for Zed
 
-Syntax highlighting and initial language-server support for Cheat Engine Auto
-Assembler (`.cea`) scripts, including embedded Lua sections.
+Zed language support for Cheat Engine Auto Assembler (`.cea`) scripts with embedded Lua.
 
 ## Features
 
-- Cheat Engine directives such as `{$STRICT}`, `{$lua}`, and `{$asm}`
-- `[ENABLE]` and `[DISABLE]` sections
-- Auto Assembler commands, labels, x86/x64 operations, registers, numbers,
-  casts, and comments
-- Lua syntax highlighting inside `{$lua}` regions
-- Error-tolerant parsing while scripts are incomplete
-- Document symbols for sections, labels, allocations, and definitions
-- Workspace completion, definitions, references, and rename for CEA symbols
-- CEA diagnostics for malformed structure, invalid command usage, duplicate
-  declarations, and unresolved explicit symbol references
-- Cross-language references from Lua address APIs such as `getAddress("symbol")`
+- Error-tolerant Tree-sitter parsing and highlighting for Auto Assembler, x86/x64 operations, sections, directives, and embedded Lua
+- Document symbols and workspace-aware completion, definitions, references, highlights, and rename for CEA symbols
+- Diagnostics for malformed structure, invalid command arguments and section usage, duplicate declarations, and unresolved explicit symbol references
+- Embedded Lua diagnostics, completion, hover, signature help, navigation, rename, code actions, and inlay hints through a managed `lua-language-server`
+- Cross-language navigation from direct Lua calls such as `getAddress("playerHealth")`
 
-The standalone CEA language server is editor-independent. Assembly LSP
-integration is intentionally out of scope. See [TODO.md](TODO.md) for the
-remaining roadmap.
+Semantic tokens and assembly language-server integration are not supported.
 
-## Language server
+> [!note] Known Limitation
+> 
+> Because we use virtual files to manage the Lua language server: saved standalone Lua changes are visible to the managed LuaLS through the filesystem, but unsaved standalone Lua changes are isolated in Zed's separate LuaLS process until saved. Though, this is rarely experienced as a problem thanks to Zed's default low-delay for auto-saving.
 
-Build or run the language server through the flake:
+## Requirements
 
-```sh
-nix build .#cea-language-server
-nix run .#cea-language-server
-```
+`cea-language-server` must be in Zed's `PATH`.
 
-For development:
+`lua-language-server` must either be in `PATH` or have its path configured below. The Nix development shell provides both.
 
-```sh
-nix develop -c cargo test --manifest-path server/Cargo.toml
-nix develop -c cargo run --manifest-path server/Cargo.toml
-```
+Development installation also requires a rustup-managed stable toolchain for Zed's `wasm32-wasip2` target.
 
-The server communicates using standard LSP over stdin and stdout. It supports
-full-text document synchronization, CEA and embedded Lua diagnostics, document
-symbols, CEA and Lua completion, hover, signature help, definitions, references,
-rename, code actions, and inlay hints.
-Embedded Lua is proxied to `lua-language-server`, which shares the project
-workspace and can resolve standalone `.lua` and `.d.lua` files. The Zed
-extension resolves `cea-language-server` from the worktree shell's `PATH` and
-launches it directly.
+## Lua configuration
 
-Saved standalone Lua changes become visible to the CEA server through the
-filesystem. Unsaved standalone Lua edits remain isolated in Zed's separate
-LuaLS process until they are saved.
-
-Both `cea-language-server` and `lua-language-server` must be available on
-Zed's `PATH`. Set `CEA_LUA_LANGUAGE_SERVER` to override the LuaLS executable.
-When `LUA_PATH` is present, its module patterns and library roots are forwarded
-to LuaLS. Relative entries are resolved from the first workspace folder, and
-Lua's `;;` marker expands to the default `?.lua` and `?/init.lua` layouts.
-
-### Lua language server configuration
-
-Configure the child Lua language server with Zed's standard LSP initialization
-options:
+Configure the managed LuaLS with Zed's LSP initialization options:
 
 ```json
 {
@@ -78,74 +45,42 @@ options:
 }
 ```
 
-All paths may be absolute or relative to the first workspace folder. Explicit
-`runtimePath` and `workspaceLibrary` entries are combined with inherited
-`LUA_PATH` entries, with explicit runtime patterns first. The
-`CEA_LUA_LANGUAGE_SERVER` environment variable overrides the configured
-`path`.
+Paths may be absolute or relative to the first workspace folder. Explicit runtime paths and libraries are combined with inherited `LUA_PATH` entries. Relative `LUA_PATH` entries resolve from the workspace, and `;;` expands to Lua's default `?.lua` and `?/init.lua` layouts.
 
-This configuration removes the need to set child-LuaLS-specific environment
-variables for reproducible project behavior. Zed must still launch the native
-`cea-language-server`, normally by inheriting a shell environment where it is
-on `PATH`; this remains relevant for Nix-based setups.
+`CEA_LUA_LANGUAGE_SERVER` overrides the configured executable path.
 
-The root Cargo package is the small Zed WebAssembly extension. The native
-language server remains an independent Cargo package under `server/`.
-
-The development shell includes `cea-language-server` on `PATH`. Launching Zed
-from that shell makes the server available to the extension:
+## Build and test
 
 ```sh
-nix develop -c rustup toolchain install stable --profile minimal
-nix develop -c zeditor .
+nix build .#cea-language-server
+nix run .#cea-language-server
+nix develop -c cargo test --manifest-path server/Cargo.toml
+nix develop -c npm test
 ```
 
-Zed uses `rustup` to install the `wasm32-wasip2` target when compiling the
-extension, so a rustup-managed default toolchain must exist.
+The flake also exposes `tree-sitter-cea`.
 
-The flake also exposes the grammar independently as
-`packages.<system>.tree-sitter-cea`.
+Run `npm run generate` after changing `grammar/grammar.js`.
 
-## Local installation
+## Install as a development extension
 
-After the grammar commit referenced by `extension.toml` has been pushed:
+The grammar commit in `extension.toml` must exist on the remote before Zed can install the extension.
 
-1. On NixOS, start Zed with `nix develop -c zeditor .` so extension builds can
-   find the native compiler toolchain. On other systems, open Zed normally.
-2. Run `zed: install dev extension`.
-3. Select this repository.
-4. Open a `.cea` file.
+1. On NixOS, the language server packages must be built first and exposed in Path. You can install the stable toolchain once with `nix develop -c rustup toolchain install stable --profile minimal`, then launch Zed with `nix develop -c zeditor .`. Elsewhere, open Zed normally.
 
-Zed uses `grammars/cea` as its private checkout directory while building the
-extension, so the maintained grammar source lives in `grammar/`.
+2. Run `zed: install dev extension` and select this repository.
 
-On NixOS, Zed's downloaded WASI compiler may not run because it is a generic
-Linux binary. After the first installation attempt creates Zed's grammar
-checkout, compile the WebAssembly grammar with the native Nix toolchain:
+3. Open a `.cea` file.
+
+Zed uses `grammars/cea` as its private grammar checkout; maintained grammar sources live under `grammar/`.
+
+If Zed's downloaded WASI compiler cannot run on NixOS, let the first install attempt create the grammar checkout, then run:
 
 ```sh
 nix develop
 npm run build:zed-grammar
 ```
 
-Retry `zed: install dev extension`. Zed will use the newer
-`grammars/cea.wasm` instead of invoking its downloaded compiler.
+Retry the installation so Zed uses the generated `grammars/cea.wasm`.
 
-## Grammar development
-
-The grammar source is under `grammar`. Enter the development shell and run the
-tests:
-
-```sh
-nix develop
-npm test
-```
-
-The shell provides Rust, Node.js, Tree-sitter CLI 0.26, and the native compiler
-toolchain used to build the parser. Run `npm run generate` after changing
-`grammar.js`.
-
-On non-Nix systems, `npm install` provides the same CLI through the existing
-development dependency.
-
-The corpus includes sanitized AA, Lua, mixed-mode, and malformed-input cases.
+I may look into how to improve the Nix install flow in the future, but for now this is sufficient for my personal use.
