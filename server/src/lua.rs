@@ -9,7 +9,8 @@ use std::{
     },
 };
 
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
 use tokio::{
     io::{
         AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
@@ -43,6 +44,7 @@ struct ProxyContext {
     pending: PendingRequests,
     diagnostics: DiagnosticPublisher,
     client: Client,
+    configuration: LuaConfig,
 }
 
 #[derive(Clone)]
@@ -87,14 +89,62 @@ pub struct LuaProxy {
     next_request_id: AtomicU64,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaConfig {
+    path: Option<String>,
+    runtime_version: Option<String>,
+    #[serde(default)]
+    runtime_path: Vec<String>,
+    #[serde(default)]
+    workspace_library: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CeaOptions {
+    lua_language_server: LuaConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum InitializationOptions {
+    Direct(CeaOptions),
+    Nested { cea: CeaOptions },
+}
+
+impl LuaConfig {
+    pub fn from_initialization_options(options: Option<Value>) -> Result<Self, String> {
+        let Some(options) = options else {
+            return Ok(Self::default());
+        };
+        serde_json::from_value::<InitializationOptions>(options)
+            .map(|options| match options {
+                InitializationOptions::Direct(options) => options.lua_language_server,
+                InitializationOptions::Nested { cea } => cea.lua_language_server,
+            })
+            .map_err(|error| format!("invalid cea.luaLanguageServer configuration: {error}"))
+    }
+}
+
 impl LuaProxy {
     pub async fn start(
         client: Client,
         diagnostics: DiagnosticPublisher,
         workspace_folders: Arc<RwLock<Vec<WorkspaceFolder>>>,
+        configuration: LuaConfig,
     ) -> Result<Self, String> {
-        let command =
-            env::var("CEA_LUA_LANGUAGE_SERVER").unwrap_or_else(|_| DEFAULT_COMMAND.to_owned());
+        let configured_command = {
+            let folders = workspace_folders.read().await;
+            configuration
+                .path
+                .as_deref()
+                .map(|path| resolve_lua_command(path, &folders))
+        };
+        let command = env::var("CEA_LUA_LANGUAGE_SERVER")
+            .ok()
+            .or(configured_command)
+            .unwrap_or_else(|| DEFAULT_COMMAND.to_owned());
         let documents = Arc::new(RwLock::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let context = ProxyContext {
@@ -103,6 +153,7 @@ impl LuaProxy {
             pending: pending.clone(),
             diagnostics: diagnostics.clone(),
             client,
+            configuration,
         };
         let (sender, receiver) = mpsc::unbounded_channel();
         let (started_sender, started_receiver) = oneshot::channel();
@@ -465,7 +516,7 @@ async fn start_process(command: &str, context: ProxyContext) -> Result<LuaProces
     sender
         .send(initialize_message(&workspace_folders))
         .map_err(|_| format!("{command} stopped before initialization"))?;
-    let configuration = lua_configuration(&workspace_folders);
+    let configuration = lua_configuration(&context.configuration, &workspace_folders);
     drop(workspace_folders);
     tokio::select! {
         initialized = timeout(Duration::from_secs(10), initialized_receiver) => {
@@ -648,22 +699,62 @@ fn configuration_section(configuration: &Value, section: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn lua_configuration(workspace_folders: &[WorkspaceFolder]) -> Option<Value> {
-    let lua_path = env::var("LUA_PATH").ok()?;
+fn lua_configuration(
+    configuration: &LuaConfig,
+    workspace_folders: &[WorkspaceFolder],
+) -> Option<Value> {
+    let lua_path = env::var("LUA_PATH").ok();
+    merged_lua_configuration(configuration, workspace_folders, lua_path.as_deref())
+}
+
+fn merged_lua_configuration(
+    configuration: &LuaConfig,
+    workspace_folders: &[WorkspaceFolder],
+    inherited_lua_path: Option<&str>,
+) -> Option<Value> {
     let workspace_root = workspace_folders
         .first()
         .and_then(|folder| folder.uri.to_file_path().ok());
-    let (runtime_paths, libraries) = lua_path_configuration(&lua_path, workspace_root.as_deref());
-    if runtime_paths.is_empty() && libraries.is_empty() {
+
+    let mut runtime_paths = resolve_unique_paths(
+        configuration.runtime_path.iter().map(String::as_str),
+        workspace_root.as_deref(),
+    );
+    let mut libraries = library_roots(&runtime_paths);
+    if let Some(lua_path) = inherited_lua_path {
+        let (environment_paths, environment_libraries) =
+            lua_path_configuration(lua_path, workspace_root.as_deref());
+        extend_unique(&mut runtime_paths, environment_paths);
+        extend_unique(&mut libraries, environment_libraries);
+    }
+    extend_unique(
+        &mut libraries,
+        resolve_unique_paths(
+            configuration.workspace_library.iter().map(String::as_str),
+            workspace_root.as_deref(),
+        ),
+    );
+
+    if configuration.runtime_version.is_none() && runtime_paths.is_empty() && libraries.is_empty() {
         return None;
     }
 
-    Some(json!({
-        "Lua": {
-            "runtime": { "path": runtime_paths },
-            "workspace": { "library": libraries }
-        }
-    }))
+    let mut runtime = Map::new();
+    if let Some(version) = &configuration.runtime_version {
+        runtime.insert("version".into(), json!(version));
+    }
+    if !runtime_paths.is_empty() {
+        runtime.insert("path".into(), json!(runtime_paths));
+    }
+
+    let mut lua = Map::new();
+    if !runtime.is_empty() {
+        lua.insert("runtime".into(), Value::Object(runtime));
+    }
+    if !libraries.is_empty() {
+        lua.insert("workspace".into(), json!({ "library": libraries }));
+    }
+    Some(json!({ "Lua": lua }))
 }
 
 fn lua_path_configuration(
@@ -678,16 +769,41 @@ fn lua_path_configuration(
         .filter(|entry| !entry.is_empty())
         .map(|entry| resolve_lua_path(entry, workspace_root))
         .collect();
+    let libraries = library_roots(&runtime_paths);
+    (runtime_paths, libraries)
+}
+
+fn resolve_unique_paths<'a>(
+    paths: impl Iterator<Item = &'a str>,
+    workspace_root: Option<&Path>,
+) -> Vec<String> {
+    let mut resolved = Vec::new();
+    extend_unique(
+        &mut resolved,
+        paths.map(|path| resolve_lua_path(path, workspace_root)),
+    );
+    resolved
+}
+
+fn library_roots(runtime_paths: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
-    let libraries = runtime_paths
+    runtime_paths
         .iter()
         .filter_map(|pattern| pattern.split_once('?').map(|(prefix, _)| prefix))
         .map(|prefix| prefix.trim_end_matches(['/', '\\']))
         .filter(|prefix| !prefix.is_empty())
         .filter(|prefix| seen.insert((*prefix).to_owned()))
         .map(str::to_owned)
-        .collect();
-    (runtime_paths, libraries)
+        .collect()
+}
+
+fn extend_unique(target: &mut Vec<String>, values: impl IntoIterator<Item = String>) {
+    let mut seen: HashSet<_> = target.iter().cloned().collect();
+    target.extend(
+        values
+            .into_iter()
+            .filter(|value| seen.insert(value.clone())),
+    );
 }
 
 fn resolve_lua_path(pattern: &str, workspace_root: Option<&Path>) -> String {
@@ -701,6 +817,16 @@ fn resolve_lua_path(pattern: &str, workspace_root: Option<&Path>) -> String {
         .unwrap_or_else(|| PathBuf::from(path))
         .to_string_lossy()
         .into_owned()
+}
+
+fn resolve_lua_command(command: &str, workspace_folders: &[WorkspaceFolder]) -> String {
+    if Path::new(command).components().count() == 1 {
+        return command.to_owned();
+    }
+    let workspace_root = workspace_folders
+        .first()
+        .and_then(|folder| folder.uri.to_file_path().ok());
+    resolve_lua_path(command, workspace_root.as_deref())
 }
 
 fn lua_document_uri(source_uri: &Url) -> Url {
@@ -801,7 +927,8 @@ async fn read_messages(
             let response = client_request_response(
                 &message,
                 &workspace_folders,
-                &lua_configuration(&workspace_folders).unwrap_or_else(|| json!({})),
+                &lua_configuration(&context.configuration, &workspace_folders)
+                    .unwrap_or_else(|| json!({})),
             );
             drop(workspace_folders);
             if let Some(error) = response.pointer("/error/message").and_then(Value::as_str) {
@@ -1057,6 +1184,98 @@ mod tests {
         assert_eq!(
             libraries,
             ["/project/vendor", "/project", "/project/shared"]
+        );
+    }
+
+    #[test]
+    fn parses_flat_and_legacy_nested_initialization_options() {
+        let direct = LuaConfig::from_initialization_options(Some(json!({
+            "luaLanguageServer": {
+                "path": "/tools/lua-language-server",
+                "runtimeVersion": "LuaJIT"
+            }
+        })))
+        .unwrap();
+        let nested = LuaConfig::from_initialization_options(Some(json!({
+            "cea": {
+                "luaLanguageServer": {
+                    "runtimePath": ["scripts/?.lua"]
+                }
+            }
+        })))
+        .unwrap();
+
+        assert_eq!(direct.path.as_deref(), Some("/tools/lua-language-server"));
+        assert_eq!(direct.runtime_version.as_deref(), Some("LuaJIT"));
+        assert_eq!(nested.runtime_path, ["scripts/?.lua"]);
+    }
+
+    #[test]
+    fn resolves_configured_executable_paths_without_breaking_path_lookup() {
+        let folders = [WorkspaceFolder {
+            uri: Url::parse("file:///workspace").unwrap(),
+            name: "workspace".into(),
+        }];
+
+        assert_eq!(
+            resolve_lua_command("tools/lua-language-server", &folders),
+            "/workspace/tools/lua-language-server"
+        );
+        assert_eq!(
+            resolve_lua_command("lua-language-server", &folders),
+            "lua-language-server"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_initialization_options() {
+        let error =
+            LuaConfig::from_initialization_options(Some(json!({ "luaLanguageServer": [] })))
+                .unwrap_err();
+
+        assert!(error.starts_with("invalid cea.luaLanguageServer configuration:"));
+    }
+
+    #[test]
+    fn merges_project_configuration_with_inherited_lua_path() {
+        let configuration = LuaConfig {
+            runtime_version: Some("LuaJIT".into()),
+            runtime_path: vec!["project/?.lua".into()],
+            workspace_library: vec!["types".into()],
+            ..LuaConfig::default()
+        };
+        let folders = [WorkspaceFolder {
+            uri: Url::parse("file:///workspace").unwrap(),
+            name: "workspace".into(),
+        }];
+
+        let merged = merged_lua_configuration(
+            &configuration,
+            &folders,
+            Some("environment/?.lua;project/?.lua"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            merged,
+            json!({
+                "Lua": {
+                    "runtime": {
+                        "version": "LuaJIT",
+                        "path": [
+                            "/workspace/project/?.lua",
+                            "/workspace/environment/?.lua"
+                        ]
+                    },
+                    "workspace": {
+                        "library": [
+                            "/workspace/project",
+                            "/workspace/environment",
+                            "/workspace/types"
+                        ]
+                    }
+                }
+            })
         );
     }
 

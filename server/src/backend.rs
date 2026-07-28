@@ -25,7 +25,10 @@ use tower_lsp::{
 };
 
 use crate::document::Document;
-use crate::{diagnostics::DiagnosticPublisher, lua::LuaProxy};
+use crate::{
+    diagnostics::DiagnosticPublisher,
+    lua::{LuaConfig, LuaProxy},
+};
 
 struct OpenDocument {
     document: Document,
@@ -38,6 +41,7 @@ pub struct Backend {
     documents: RwLock<HashMap<Url, OpenDocument>>,
     lua: RwLock<Option<LuaProxy>>,
     workspace_folders: Arc<RwLock<Vec<WorkspaceFolder>>>,
+    lua_config: RwLock<LuaConfig>,
 }
 
 impl Backend {
@@ -49,6 +53,7 @@ impl Backend {
             documents: RwLock::new(HashMap::new()),
             lua: RwLock::new(None),
             workspace_folders: Arc::new(RwLock::new(Vec::new())),
+            lua_config: RwLock::new(LuaConfig::default()),
         }
     }
 
@@ -85,6 +90,10 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let lua_config =
+            LuaConfig::from_initialization_options(params.initialization_options.clone())
+                .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;
+        *self.lua_config.write().await = lua_config;
         #[allow(deprecated)]
         let workspace_folders = params.workspace_folders.unwrap_or_else(|| {
             params
@@ -162,6 +171,7 @@ impl LanguageServer for Backend {
             self.client.clone(),
             self.diagnostics.clone(),
             self.workspace_folders.clone(),
+            self.lua_config.read().await.clone(),
         )
         .await
         {

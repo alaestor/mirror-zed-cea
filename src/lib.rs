@@ -26,6 +26,17 @@ impl zed::Extension for CeaExtension {
             env: worktree.shell_env(),
         })
     }
+
+    fn language_server_initialization_options(
+        &mut self,
+        _language_server_id: &zed::LanguageServerId,
+        worktree: &zed::Worktree,
+    ) -> zed::Result<Option<zed::serde_json::Value>> {
+        Ok(
+            zed::settings::LspSettings::for_worktree(LANGUAGE_SERVER_NAME, worktree)?
+                .initialization_options,
+        )
+    }
 }
 
 zed::register_extension!(CeaExtension);

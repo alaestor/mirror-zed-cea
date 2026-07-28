@@ -306,6 +306,11 @@ fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
             }
         }),
     );
+    receive_matching(&mut stdout, |message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == "file:///tmp/cea-lsp-proxy-test/proxy-fixture.cea"
+            && message["params"]["diagnostics"] == json!([])
+    });
     send(
         &mut stdin,
         json!({
@@ -525,7 +530,6 @@ fn restarts_lua_ls_and_resynchronizes_open_documents() {
     let workspace_uri = format!("file://{}", fixture_dir.display());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
-        .env("CEA_LUA_LANGUAGE_SERVER", &fake_lua_ls)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -542,7 +546,12 @@ fn restarts_lua_ls_and_resynchronizes_open_documents() {
             "params": {
                 "capabilities": {},
                 "processId": null,
-                "rootUri": workspace_uri
+                "rootUri": workspace_uri,
+                "initializationOptions": {
+                    "luaLanguageServer": {
+                        "path": fake_lua_ls
+                    }
+                }
             }
         }),
     );

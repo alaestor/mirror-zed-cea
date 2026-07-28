@@ -53,6 +53,39 @@ When `LUA_PATH` is present, its module patterns and library roots are forwarded
 to LuaLS. Relative entries are resolved from the first workspace folder, and
 Lua's `;;` marker expands to the default `?.lua` and `?/init.lua` layouts.
 
+### Lua language server configuration
+
+Configure the child Lua language server with Zed's standard LSP initialization
+options:
+
+```json
+{
+  "lsp": {
+    "cea-language-server": {
+      "initialization_options": {
+        "luaLanguageServer": {
+          "path": "lua-language-server",
+          "runtimeVersion": "LuaJIT",
+          "runtimePath": ["scripts/?.lua", "scripts/?/init.lua"],
+          "workspaceLibrary": ["types"]
+        }
+      }
+    }
+  }
+}
+```
+
+All paths may be absolute or relative to the first workspace folder. Explicit
+`runtimePath` and `workspaceLibrary` entries are combined with inherited
+`LUA_PATH` entries, with explicit runtime patterns first. The
+`CEA_LUA_LANGUAGE_SERVER` environment variable overrides the configured
+`path`.
+
+This configuration removes the need to set child-LuaLS-specific environment
+variables for reproducible project behavior. Zed must still launch the native
+`cea-language-server`, normally by inheriting a shell environment where it is
+on `PATH`; this remains relevant for Nix-based setups.
+
 The root Cargo package is the small Zed WebAssembly extension. The native
 language server remains an independent Cargo package under `server/`.
 

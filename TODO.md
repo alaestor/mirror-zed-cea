@@ -158,26 +158,13 @@ advertised its own capabilities. Lua regions retain Tree-sitter highlighting.
 
 ### 4. Add user configuration
 
-- [ ] Expose settings for the LuaLS executable, runtime version, runtime paths, and
+- [x] Expose settings for the LuaLS executable, runtime version, runtime paths, and
   workspace libraries.
-- [ ] Merge explicit project configuration with inherited `LUA_PATH` values.
-- [ ] Keep environment variables as convenient overrides while making project
-  behavior reproducible without a particular shell setup.
-
-Suggested configuration shape:
-
-```json
-{
-  "cea": {
-    "luaLanguageServer": {
-      "path": "lua-language-server",
-      "runtimeVersion": "LuaJIT",
-      "runtimePath": [],
-      "workspaceLibrary": []
-    }
-  }
-}
-```
+- [x] Merge explicit project configuration with inherited `LUA_PATH` values.
+- [x] Keep child-LuaLS environment variables as convenient overrides while
+  allowing project behavior to be configured without relying on those
+  variables. The native CEA server still needs to be available to Zed, usually
+  through the worktree shell's `PATH`.
 
 ### 5. Build native CEA intelligence
 
