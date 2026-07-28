@@ -170,7 +170,13 @@ impl WorkspaceSymbolIndex {
                     });
             }
         }
-        for occurrences in declarations.values() {
+        for occurrences in declarations.values_mut() {
+            occurrences.sort_by(|left, right| {
+                left.uri
+                    .as_str()
+                    .cmp(right.uri.as_str())
+                    .then_with(|| left.occurrence.range.start.cmp(&right.occurrence.range.start))
+            });
             for duplicate in duplicate_declarations(occurrences) {
                 diagnostics
                     .entry(duplicate.uri.clone())
