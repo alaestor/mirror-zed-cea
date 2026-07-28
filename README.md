@@ -62,6 +62,8 @@ The flake also exposes `tree-sitter-cea`.
 
 Run `npm run generate` after changing `grammar/grammar.js`.
 
+To prepare release metadata and changelog: from a clean tree, run `nix run .#bump -- 0.3.0`. Review and commit the result before tagging.
+
 ## Install as a development extension
 
 The grammar commit in `extension.toml` must exist on the remote before Zed can install the extension.

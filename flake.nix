@@ -11,6 +11,7 @@
         "x86_64-linux"
       ];
       forEachSystem = nixpkgs.lib.genAttrs supportedSystems;
+      version = "0.1.0";
     in
     {
       packages = forEachSystem (
@@ -26,7 +27,7 @@
           };
           ceaLanguageServer = pkgs.rustPlatform.buildRustPackage {
             pname = "cea-language-server";
-            version = "0.1.0";
+            inherit version;
             src = source;
             buildAndTestSubdir = "server";
             cargoRoot = "server";
@@ -34,7 +35,7 @@
           };
           treeSitterCea = pkgs.tree-sitter.buildGrammar {
             language = "cea";
-            version = "0.1.0";
+            inherit version;
             src = ./grammar;
           };
         in
@@ -42,6 +43,31 @@
           default = ceaLanguageServer;
           cea-language-server = ceaLanguageServer;
           tree-sitter-cea = treeSitterCea;
+        }
+      );
+
+      apps = forEachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          bump = pkgs.writeShellApplication {
+            name = "bump-version";
+            runtimeInputs = [
+              pkgs.git
+              pkgs.git-cliff
+              pkgs.python3
+            ];
+            text = ''
+              exec python3 ${./scripts/bump-version.py} "$@"
+            '';
+          };
+        in
+        {
+          bump = {
+            type = "app";
+            program = "${bump}/bin/bump-version";
+            meta.description = "Bump release metadata and generate changelog entries";
+          };
         }
       );
 
