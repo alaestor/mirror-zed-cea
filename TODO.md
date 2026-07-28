@@ -109,54 +109,54 @@ initially remain local to Zed's separate LuaLS process.
 - Add incremental synchronization, rename, code actions, semantic tokens, and
   automatic LuaLS installation only after the proxy design is stable.
 
-## analysis and recommendations:
+## Recommendations
 
 The proxy foundation is functional. Prioritize correctness and resilience
 before expanding the feature surface.
 
 ### 1. Harden the LuaLS proxy
 
-- Restart LuaLS after an unexpected exit and resynchronize open virtual
+- [x] Restart LuaLS after an unexpected exit and resynchronize open virtual
   documents.
-- Forward request cancellation and discard abandoned pending responses.
-- Handle LuaLS client requests deliberately, especially
+- [ ] Forward request cancellation and discard abandoned pending responses.
+- [ ] Handle LuaLS client requests deliberately, especially
   `workspace/configuration` and dynamic capability registration.
-- Translate CEA document URIs in diagnostic related information, nested
+- [ ] Translate CEA document URIs in diagnostic related information, nested
   response fields, workspace edits, and other URI-bearing payloads.
-- Support all workspace folders instead of selecting only the first.
-- Ensure virtual text is never written back to the source `.cea` file.
-- Improve request timeout, child-process, and protocol error reporting.
+- [ ] Support all workspace folders instead of selecting only the first.
+- [ ] Ensure virtual text is never written back to the source `.cea` file.
+- [ ] Improve request timeout, child-process, and protocol error reporting.
 
 ### 2. Complete Lua feature forwarding
 
-- Add completion-item resolution.
-- Forward declaration, type-definition, implementation, and document-highlight
+- [ ] Add completion-item resolution.
+- [ ] Forward declaration, type-definition, implementation, and document-highlight
   requests.
-- Add rename and code actions after workspace-edit URI and range translation is
+- [ ] Add rename and code actions after workspace-edit URI and range translation is
   reliable.
-- Evaluate semantic tokens and inlay hints after the core proxy operations are
+- [ ] Evaluate semantic tokens and inlay hints after the core proxy operations are
   stable.
 
 ### 3. Validate cross-file behavior
 
-- Add integration fixtures for CEA references into project `.lua` files,
+- [ ] Add integration fixtures for CEA references into project `.lua` files,
   `.d.lua` declarations, `require` targets, and external `LUA_PATH` libraries.
-- Cover both `?.lua` and `?/init.lua` module layouts.
-- Resolve relative `LUA_PATH` roots against the workspace.
-- Implement Lua's empty `;;` default-path semantics.
-- Test multiple CEA files sharing Lua declarations.
-- Expand coverage for LF, CRLF, non-ASCII text, malformed mode transitions,
+- [ ] Cover both `?.lua` and `?/init.lua` module layouts.
+- [ ] Resolve relative `LUA_PATH` roots against the workspace.
+- [ ] Implement Lua's empty `;;` default-path semantics.
+- [ ] Test multiple CEA files sharing Lua declarations.
+- [ ] Expand coverage for LF, CRLF, non-ASCII text, malformed mode transitions,
   and multiple embedded Lua regions.
-- Document that saved standalone Lua changes are visible through the
+- [ ] Document that saved standalone Lua changes are visible through the
   filesystem while unsaved changes remain isolated in Zed's separate LuaLS
   process.
 
 ### 4. Add user configuration
 
-- Expose settings for the LuaLS executable, runtime version, runtime paths, and
+- [ ] Expose settings for the LuaLS executable, runtime version, runtime paths, and
   workspace libraries.
-- Merge explicit project configuration with inherited `LUA_PATH` values.
-- Keep environment variables as convenient overrides while making project
+- [ ] Merge explicit project configuration with inherited `LUA_PATH` values.
+- [ ] Keep environment variables as convenient overrides while making project
   behavior reproducible without a particular shell setup.
 
 Suggested configuration shape:
@@ -176,12 +176,12 @@ Suggested configuration shape:
 
 ### 5. Build native CEA intelligence
 
-- Create a shared CEA symbol index for labels, allocations, definitions, and
+- [ ] Create a shared CEA symbol index for labels, allocations, definitions, and
   registered symbols.
-- Use the index for completion, go-to-definition, references, and rename.
-- Diagnose duplicate declarations, unresolved symbols, invalid section usage,
+- [ ] Use the index for completion, go-to-definition, references, and rename.
+- [ ] Diagnose duplicate declarations, unresolved symbols, invalid section usage,
   malformed mode transitions, and invalid command arguments.
-- Link CEA declarations to Lua APIs that refer to symbols by string, such as
+- [ ] Link CEA declarations to Lua APIs that refer to symbols by string, such as
   `getAddress("playerHealth")`.
 
 The recommended next milestone is the native CEA symbol index. It unlocks

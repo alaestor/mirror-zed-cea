@@ -16,7 +16,7 @@ use tokio::{
     },
     process::{Child, Command},
     sync::{mpsc, oneshot, Mutex, RwLock},
-    time::{timeout, Duration},
+    time::{sleep, timeout, Duration},
 };
 use tower_lsp::{
     lsp_types::{MessageType, Position, PublishDiagnosticsParams, Range, Url},
@@ -31,15 +31,29 @@ const DEFAULT_COMMAND: &str = "lua-language-server";
 type PendingRequests = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
 #[derive(Clone)]
+struct ProxyContext {
+    documents: Arc<RwLock<HashMap<Url, ProxyDocument>>>,
+    pending: PendingRequests,
+    diagnostics: DiagnosticPublisher,
+    client: Client,
+}
+
+#[derive(Clone)]
 struct ProxyDocument {
     source_uri: Url,
+    version: i32,
+    source: String,
     ranges: Vec<Range>,
 }
 
+enum SupervisorCommand {
+    Message(Value),
+    Shutdown(oneshot::Sender<()>),
+}
+
 pub struct LuaProxy {
-    sender: mpsc::UnboundedSender<Value>,
+    sender: mpsc::UnboundedSender<SupervisorCommand>,
     documents: Arc<RwLock<HashMap<Url, ProxyDocument>>>,
-    child: Mutex<Child>,
     diagnostics: DiagnosticPublisher,
     pending: PendingRequests,
     next_request_id: AtomicU64,
@@ -53,80 +67,31 @@ impl LuaProxy {
     ) -> Result<Self, String> {
         let command =
             env::var("CEA_LUA_LANGUAGE_SERVER").unwrap_or_else(|_| DEFAULT_COMMAND.to_owned());
-        let mut child = Command::new(&command)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| format!("failed to start {command}: {error}"))?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| format!("{command} did not provide stdin"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| format!("{command} did not provide stdout"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| format!("{command} did not provide stderr"))?;
-
-        let (sender, mut receiver) = mpsc::unbounded_channel::<Value>();
-        tokio::spawn(async move {
-            let mut stdin = stdin;
-            while let Some(message) = receiver.recv().await {
-                if write_message(&mut stdin, &message).await.is_err() {
-                    break;
-                }
-            }
-        });
-
         let documents = Arc::new(RwLock::new(HashMap::new()));
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        let (initialized_sender, initialized_receiver) = oneshot::channel();
-        tokio::spawn(read_messages(
-            stdout,
-            sender.clone(),
-            documents.clone(),
-            pending.clone(),
-            diagnostics.clone(),
-            client.clone(),
-            initialized_sender,
+        let context = ProxyContext {
+            documents: documents.clone(),
+            pending: pending.clone(),
+            diagnostics: diagnostics.clone(),
+            client,
+        };
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let (started_sender, started_receiver) = oneshot::channel();
+        tokio::spawn(supervise(
+            command.clone(),
+            workspace_uri,
+            receiver,
+            context,
+            started_sender,
         ));
-        tokio::spawn(log_stderr(stderr, client.clone()));
-
-        sender
-            .send(initialize_message(workspace_uri.as_ref()))
-            .map_err(|_| format!("{command} stopped before initialization"))?;
-        timeout(Duration::from_secs(10), initialized_receiver)
+        timeout(Duration::from_secs(10), started_receiver)
             .await
             .map_err(|_| format!("timed out initializing {command}"))?
             .map_err(|_| format!("{command} stopped during initialization"))??;
 
-        sender
-            .send(json!({
-                "jsonrpc": "2.0",
-                "method": "initialized",
-                "params": {}
-            }))
-            .map_err(|_| format!("{command} stopped after initialization"))?;
-        if let Some(configuration) = lua_configuration() {
-            sender
-                .send(json!({
-                    "jsonrpc": "2.0",
-                    "method": "workspace/didChangeConfiguration",
-                    "params": { "settings": configuration }
-                }))
-                .map_err(|_| format!("{command} stopped while configuring its workspace"))?;
-        }
-
         Ok(Self {
             sender,
             documents,
-            child: Mutex::new(child),
             diagnostics,
             pending,
             next_request_id: AtomicU64::new(FIRST_PROXY_REQUEST_ID),
@@ -139,11 +104,13 @@ impl LuaProxy {
             virtual_uri.clone(),
             ProxyDocument {
                 source_uri: source_uri.clone(),
+                version,
+                source: virtual_document.source.clone(),
                 ranges: virtual_document.ranges,
             },
         );
         self.diagnostics.set_lua(source_uri, Vec::new()).await;
-        let _ = self.sender.send(json!({
+        self.send(json!({
             "jsonrpc": "2.0",
             "method": "textDocument/didOpen",
             "params": {
@@ -168,11 +135,13 @@ impl LuaProxy {
             virtual_uri.clone(),
             ProxyDocument {
                 source_uri: source_uri.clone(),
+                version,
+                source: virtual_document.source.clone(),
                 ranges: virtual_document.ranges,
             },
         );
         self.diagnostics.set_lua(source_uri, Vec::new()).await;
-        let _ = self.sender.send(json!({
+        self.send(json!({
             "jsonrpc": "2.0",
             "method": "textDocument/didChange",
             "params": {
@@ -188,7 +157,7 @@ impl LuaProxy {
     pub async fn close(&self, source_uri: &Url) {
         let virtual_uri = lua_document_uri(source_uri);
         self.documents.write().await.remove(&virtual_uri);
-        let _ = self.sender.send(json!({
+        self.send(json!({
             "jsonrpc": "2.0",
             "method": "textDocument/didClose",
             "params": {
@@ -232,12 +201,12 @@ impl LuaProxy {
             .insert(request_id, response_sender);
         if self
             .sender
-            .send(json!({
+            .send(SupervisorCommand::Message(json!({
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "method": method,
                 "params": params
-            }))
+            })))
             .is_err()
         {
             self.pending.lock().await.remove(&request_id);
@@ -253,20 +222,246 @@ impl LuaProxy {
     }
 
     pub async fn shutdown(&self) {
-        let _ = self.sender.send(json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "shutdown",
-            "params": null
-        }));
-        let _ = self.sender.send(json!({
-            "jsonrpc": "2.0",
-            "method": "exit"
-        }));
-        let mut child = self.child.lock().await;
-        if timeout(Duration::from_secs(2), child.wait()).await.is_err() {
-            let _ = child.kill().await;
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        if self
+            .sender
+            .send(SupervisorCommand::Shutdown(shutdown_sender))
+            .is_ok()
+        {
+            let _ = shutdown_receiver.await;
         }
+    }
+
+    fn send(&self, message: Value) {
+        let _ = self.sender.send(SupervisorCommand::Message(message));
+    }
+}
+
+struct LuaProcess {
+    sender: mpsc::UnboundedSender<Value>,
+    child: Child,
+    exited: oneshot::Receiver<()>,
+}
+
+async fn supervise(
+    command: String,
+    workspace_uri: Option<Url>,
+    mut receiver: mpsc::UnboundedReceiver<SupervisorCommand>,
+    context: ProxyContext,
+    started_sender: oneshot::Sender<Result<(), String>>,
+) {
+    let mut started_sender = Some(started_sender);
+    let mut backlog = Vec::new();
+    loop {
+        let process = start_process(&command, workspace_uri.as_ref(), context.clone()).await;
+        let mut process = match process {
+            Ok(process) => process,
+            Err(error) => {
+                if let Some(started_sender) = started_sender.take() {
+                    let _ = started_sender.send(Err(error));
+                    return;
+                }
+                context
+                    .client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("failed to restart LuaLS: {error}; retrying"),
+                    )
+                    .await;
+                sleep(Duration::from_secs(1)).await;
+                while let Ok(command) = receiver.try_recv() {
+                    match command {
+                        SupervisorCommand::Message(message) => backlog.push(message),
+                        SupervisorCommand::Shutdown(shutdown_sender) => {
+                            let _ = shutdown_sender.send(());
+                            return;
+                        }
+                    }
+                }
+                if receiver.is_closed() {
+                    return;
+                }
+                continue;
+            }
+        };
+
+        let open_count = replay_open_documents(&process.sender, &context.documents).await;
+        for message in backlog.drain(..) {
+            if process.sender.send(message).is_err() {
+                break;
+            }
+        }
+        if let Some(started_sender) = started_sender.take() {
+            let _ = started_sender.send(Ok(()));
+        } else {
+            context
+                .client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "LuaLS restarted and resynchronized {open_count} open virtual documents"
+                    ),
+                )
+                .await;
+        }
+
+        let restart = loop {
+            tokio::select! {
+                command = receiver.recv() => match command {
+                    Some(SupervisorCommand::Message(message)) => {
+                        if process.sender.send(message).is_err() {
+                            break true;
+                        }
+                    }
+                    Some(SupervisorCommand::Shutdown(shutdown_sender)) => {
+                        shutdown_process(&process.sender, &mut process.child).await;
+                        let _ = shutdown_sender.send(());
+                        return;
+                    }
+                    None => {
+                        let _ = process.child.kill().await;
+                        return;
+                    }
+                },
+                _ = &mut process.exited => break true,
+            }
+        };
+
+        if restart {
+            if timeout(Duration::from_secs(2), process.child.wait())
+                .await
+                .is_err()
+            {
+                let _ = process.child.kill().await;
+            }
+            context
+                .client
+                .log_message(
+                    MessageType::WARNING,
+                    "LuaLS exited unexpectedly; restarting",
+                )
+                .await;
+        }
+    }
+}
+
+async fn start_process(
+    command: &str,
+    workspace_uri: Option<&Url>,
+    context: ProxyContext,
+) -> Result<LuaProcess, String> {
+    let mut child = Command::new(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("failed to start {command}: {error}"))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("{command} did not provide stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("{command} did not provide stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("{command} did not provide stderr"))?;
+
+    let (sender, mut receiver) = mpsc::unbounded_channel::<Value>();
+    tokio::spawn(async move {
+        let mut stdin = stdin;
+        while let Some(message) = receiver.recv().await {
+            if write_message(&mut stdin, &message).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let (initialized_sender, initialized_receiver) = oneshot::channel();
+    let (exited_sender, exited) = oneshot::channel();
+    tokio::spawn(read_messages(
+        stdout,
+        sender.clone(),
+        context.clone(),
+        initialized_sender,
+        exited_sender,
+    ));
+    tokio::spawn(log_stderr(stderr, context.client));
+
+    sender
+        .send(initialize_message(workspace_uri))
+        .map_err(|_| format!("{command} stopped before initialization"))?;
+    timeout(Duration::from_secs(10), initialized_receiver)
+        .await
+        .map_err(|_| format!("timed out initializing {command}"))?
+        .map_err(|_| format!("{command} stopped during initialization"))??;
+    sender
+        .send(json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        }))
+        .map_err(|_| format!("{command} stopped after initialization"))?;
+    if let Some(configuration) = lua_configuration() {
+        sender
+            .send(json!({
+                "jsonrpc": "2.0",
+                "method": "workspace/didChangeConfiguration",
+                "params": { "settings": configuration }
+            }))
+            .map_err(|_| format!("{command} stopped while configuring its workspace"))?;
+    }
+
+    Ok(LuaProcess {
+        sender,
+        child,
+        exited,
+    })
+}
+
+async fn replay_open_documents(
+    sender: &mpsc::UnboundedSender<Value>,
+    documents: &RwLock<HashMap<Url, ProxyDocument>>,
+) -> usize {
+    let documents = documents.read().await;
+    for (virtual_uri, document) in documents.iter() {
+        let _ = sender.send(did_open_message(virtual_uri, document));
+    }
+    documents.len()
+}
+
+fn did_open_message(virtual_uri: &Url, document: &ProxyDocument) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": virtual_uri,
+                "languageId": "lua",
+                "version": document.version,
+                "text": document.source
+            }
+        }
+    })
+}
+
+async fn shutdown_process(sender: &mpsc::UnboundedSender<Value>, child: &mut Child) {
+    let _ = sender.send(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "shutdown",
+        "params": null
+    }));
+    let _ = sender.send(json!({
+        "jsonrpc": "2.0",
+        "method": "exit"
+    }));
+    if timeout(Duration::from_secs(2), child.wait()).await.is_err() {
+        let _ = child.kill().await;
     }
 }
 
@@ -346,11 +541,9 @@ fn lua_document_uri(source_uri: &Url) -> Url {
 async fn read_messages(
     stdout: impl AsyncRead + Unpin,
     sender: mpsc::UnboundedSender<Value>,
-    documents: Arc<RwLock<HashMap<Url, ProxyDocument>>>,
-    pending: PendingRequests,
-    diagnostics: DiagnosticPublisher,
-    client: Client,
+    context: ProxyContext,
     initialized_sender: oneshot::Sender<Result<(), String>>,
+    exited_sender: oneshot::Sender<()>,
 ) {
     let mut reader = BufReader::new(stdout);
     let mut initialized_sender = Some(initialized_sender);
@@ -359,7 +552,8 @@ async fn read_messages(
             Ok(Some(message)) => message,
             Ok(None) => break,
             Err(error) => {
-                client
+                context
+                    .client
                     .log_message(MessageType::ERROR, format!("LuaLS protocol error: {error}"))
                     .await;
                 break;
@@ -380,7 +574,7 @@ async fn read_messages(
 
         if message.get("method").is_none() {
             if let Some(id) = message.get("id").and_then(Value::as_u64) {
-                if let Some(response_sender) = pending.lock().await.remove(&id) {
+                if let Some(response_sender) = context.pending.lock().await.remove(&id) {
                     let result = if let Some(error) = message.get("error") {
                         Err(format!("LuaLS request failed: {error}"))
                     } else {
@@ -397,14 +591,20 @@ async fn read_messages(
             if let Some(params) = message.get("params").cloned() {
                 match serde_json::from_value::<PublishDiagnosticsParams>(params) {
                     Ok(params) => {
-                        if let Some(document) = documents.read().await.get(&params.uri).cloned() {
+                        if let Some(document) =
+                            context.documents.read().await.get(&params.uri).cloned()
+                        {
                             let filtered =
                                 filter_lua_diagnostics(params.diagnostics, &document.ranges);
-                            diagnostics.set_lua(document.source_uri, filtered).await;
+                            context
+                                .diagnostics
+                                .set_lua(document.source_uri, filtered)
+                                .await;
                         }
                     }
                     Err(error) => {
-                        client
+                        context
+                            .client
                             .log_message(
                                 MessageType::ERROR,
                                 format!("invalid LuaLS diagnostics: {error}"),
@@ -428,9 +628,10 @@ async fn read_messages(
     if let Some(initialized_sender) = initialized_sender {
         let _ = initialized_sender.send(Err("LuaLS exited before initialization".into()));
     }
-    for (_, response_sender) in pending.lock().await.drain() {
+    for (_, response_sender) in context.pending.lock().await.drain() {
         let _ = response_sender.send(Err("LuaLS exited".into()));
     }
+    let _ = exited_sender.send(());
 }
 
 async fn log_stderr(stderr: impl AsyncRead + Unpin, client: Client) {
@@ -570,6 +771,8 @@ mod tests {
             virtual_uri.clone(),
             ProxyDocument {
                 source_uri: source_uri.clone(),
+                version: 1,
+                source: String::new(),
                 ranges: Vec::new(),
             },
         )]);
@@ -585,6 +788,37 @@ mod tests {
         assert_eq!(
             translated["related"][0]["uri"],
             "file:///project/helpers.lua"
+        );
+    }
+
+    #[tokio::test]
+    async fn replays_latest_open_document_state() {
+        let virtual_uri = Url::parse("file:///project/player.cea").unwrap();
+        let documents = RwLock::new(HashMap::from([(
+            virtual_uri.clone(),
+            ProxyDocument {
+                source_uri: virtual_uri.clone(),
+                version: 7,
+                source: "      \nprint('latest')\n".into(),
+                ranges: Vec::new(),
+            },
+        )]));
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+
+        let open_count = replay_open_documents(&sender, &documents).await;
+        let message = receiver.recv().await.unwrap();
+
+        assert_eq!(open_count, 1);
+        assert_eq!(message["method"], "textDocument/didOpen");
+        assert_eq!(
+            message["params"]["textDocument"]["uri"],
+            virtual_uri.as_str()
+        );
+        assert_eq!(message["params"]["textDocument"]["languageId"], "lua");
+        assert_eq!(message["params"]["textDocument"]["version"], 7);
+        assert_eq!(
+            message["params"]["textDocument"]["text"],
+            "      \nprint('latest')\n"
         );
     }
 
