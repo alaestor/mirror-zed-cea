@@ -123,7 +123,7 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
                     "uri": "file:///fixture.cea",
                     "languageId": "cea",
                     "version": 1,
-                    "text": "[ENABLE]\ndefine(value, 10)\nentry:\n"
+                    "text": "[ENABLE]\ndefine(value, 10)\nentry:\nalloc(storage,100)\nregistersymbol(storage)\n{$lua}\nlocal address = getAddress(\"storage\")\n{$asm}\n[DISABLE]\nunregistersymbol(storage)\ndealloc(storage)\n"
                 }
             }
         }),
@@ -132,6 +132,26 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
         message["method"] == "textDocument/publishDiagnostics"
     });
     assert_eq!(diagnostics["params"]["diagnostics"], json!([]));
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": "file:///consumer.cea",
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": "[ENABLE]\nregistersymbol(storage)\n{$lua}\nreturn getAddress(\"storage\")\n{$asm}\n"
+                }
+            }
+        }),
+    );
+    let consumer_diagnostics = receive_matching(&mut stdout, |message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == "file:///consumer.cea"
+    });
+    assert_eq!(consumer_diagnostics["params"]["diagnostics"], json!([]));
 
     send(
         &mut stdin,
@@ -153,18 +173,112 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
         .iter()
         .map(|symbol| symbol["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["[ENABLE]", "define(value)", "entry"]);
+    assert_eq!(
+        names,
+        [
+            "[ENABLE]",
+            "define(value)",
+            "entry",
+            "alloc(storage)",
+            "[DISABLE]"
+        ]
+    );
 
     send(
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
             "id": 3,
+            "method": "textDocument/completion",
+            "params": {
+                "textDocument": { "uri": "file:///fixture.cea" },
+                "position": { "line": 3, "character": 0 }
+            }
+        }),
+    );
+    let completion = receive_matching(&mut stdout, |message| message["id"] == 3);
+    let completion_labels: Vec<_> = completion["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["label"].as_str())
+        .collect();
+    assert!(completion_labels.contains(&"storage"));
+    assert!(completion_labels.contains(&"value"));
+    assert!(completion_labels.contains(&"entry"));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": { "uri": "file:///consumer.cea" },
+                "position": { "line": 3, "character": 20 }
+            }
+        }),
+    );
+    let definition = receive_matching(&mut stdout, |message| message["id"] == 4);
+    assert_eq!(definition["result"][0]["uri"], "file:///fixture.cea");
+    assert_eq!(
+        definition["result"][0]["range"]["start"],
+        json!({ "line": 3, "character": 6 })
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "textDocument/references",
+            "params": {
+                "textDocument": { "uri": "file:///fixture.cea" },
+                "position": { "line": 3, "character": 8 },
+                "context": { "includeDeclaration": true }
+            }
+        }),
+    );
+    let references = receive_matching(&mut stdout, |message| message["id"] == 5);
+    assert_eq!(references["result"].as_array().unwrap().len(), 7);
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "textDocument/rename",
+            "params": {
+                "textDocument": { "uri": "file:///consumer.cea" },
+                "position": { "line": 3, "character": 20 },
+                "newName": "playerStorage"
+            }
+        }),
+    );
+    let rename = receive_matching(&mut stdout, |message| message["id"] == 6);
+    let edits = rename["result"]["changes"]["file:///fixture.cea"]
+        .as_array()
+        .unwrap();
+    assert_eq!(edits.len(), 5);
+    assert!(edits.iter().all(|edit| edit["newText"] == "playerStorage"));
+    let consumer_edits = rename["result"]["changes"]["file:///consumer.cea"]
+        .as_array()
+        .unwrap();
+    assert_eq!(consumer_edits.len(), 2);
+    assert!(consumer_edits
+        .iter()
+        .all(|edit| edit["newText"] == "playerStorage"));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
             "method": "shutdown",
             "params": null
         }),
     );
-    receive_matching(&mut stdout, |message| message["id"] == 3);
+    receive_matching(&mut stdout, |message| message["id"] == 7);
     send(
         &mut stdin,
         json!({

@@ -3,6 +3,8 @@ use tower_lsp::lsp_types::{
 };
 use tree_sitter::{ffi::TSLanguage, Language, Node, Parser, Point, Tree};
 
+use crate::symbol_index::DocumentSymbolIndex;
+
 extern "C" {
     fn tree_sitter_cea() -> *const TSLanguage;
 }
@@ -34,6 +36,7 @@ impl Document {
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         collect_diagnostics(self.tree.root_node(), &self.source, &mut diagnostics, false);
+        collect_structure_diagnostics(self.tree.root_node(), &self.source, &mut diagnostics);
         diagnostics
     }
 
@@ -41,6 +44,10 @@ impl Document {
         let mut symbols = Vec::new();
         collect_symbols(self.tree.root_node(), &self.source, &mut symbols);
         symbols
+    }
+
+    pub fn symbol_index(&self) -> DocumentSymbolIndex {
+        DocumentSymbolIndex::build(self.tree.root_node(), &self.source)
     }
 
     pub fn lua_virtual_document(&self) -> LuaVirtualDocument {
@@ -79,6 +86,109 @@ impl Document {
         }
 
         LuaVirtualDocument { source, ranges }
+    }
+}
+
+fn collect_structure_diagnostics(root: Node<'_>, source: &str, diagnostics: &mut Vec<Diagnostic>) {
+    let mut sections = Vec::new();
+    let mut commands = Vec::new();
+    collect_nodes(root, &mut sections, &mut commands);
+
+    let mut enable_seen = false;
+    let mut disable_seen = false;
+    for section in sections {
+        let name = node_text(section, source)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let invalid = match name.as_str() {
+            "[enable]" => {
+                let duplicate = enable_seen || disable_seen;
+                enable_seen = true;
+                duplicate
+            }
+            "[disable]" => {
+                let invalid = disable_seen || !enable_seen;
+                disable_seen = true;
+                invalid
+            }
+            _ => false,
+        };
+        if invalid {
+            diagnostics.push(cea_diagnostic(
+                node_range(section, source),
+                format!("invalid section usage: {name}"),
+            ));
+        }
+    }
+
+    for command in commands {
+        let Some(name_node) = command.child_by_field_name("name") else {
+            continue;
+        };
+        let name = node_text(name_node, source)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let count = argument_count(command, source);
+        let valid = match name.as_str() {
+            "alloc" => (2..=3).contains(&count),
+            "globalalloc" => count == 2,
+            "define" | "aobscan" | "assert" => count == 2,
+            "aobscanmodule" => count == 3,
+            "dealloc" | "createthread" => count == 1,
+            "label" | "registersymbol" | "unregistersymbol" => count >= 1,
+            "fullaccess" => (1..=2).contains(&count),
+            _ => true,
+        };
+        if !valid {
+            diagnostics.push(cea_diagnostic(
+                node_range(command, source),
+                format!(
+                    "invalid arguments for `{}`: received {count}",
+                    node_text(name_node, source).unwrap_or_default()
+                ),
+            ));
+        }
+    }
+}
+
+fn collect_nodes<'tree>(
+    node: Node<'tree>,
+    sections: &mut Vec<Node<'tree>>,
+    commands: &mut Vec<Node<'tree>>,
+) {
+    match node.kind() {
+        "section_header" => sections.push(node),
+        "aa_command" => commands.push(node),
+        "lua_chunk" => return,
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_nodes(child, sections, commands);
+    }
+}
+
+fn argument_count(node: Node<'_>, source: &str) -> usize {
+    let Some(arguments) = node.child_by_field_name("arguments").or_else(|| {
+        let mut cursor = node.walk();
+        let arguments = node
+            .named_children(&mut cursor)
+            .find(|child| child.kind() == "argument_list");
+        arguments
+    }) else {
+        return 0;
+    };
+    let text = node_text(arguments, source).unwrap_or_default();
+    usize::from(!text.trim().is_empty()) + text.bytes().filter(|byte| *byte == b',').count()
+}
+
+fn cea_diagnostic(range: Range, message: String) -> Diagnostic {
+    Diagnostic {
+        range,
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("cea".into()),
+        message,
+        ..Diagnostic::default()
     }
 }
 
@@ -327,5 +437,28 @@ second()
         assert!(virtual_document.source.contains("second()"));
         assert!(!virtual_document.source.contains("nop"));
         assert_eq!(virtual_document.ranges.len(), 2);
+    }
+
+    #[test]
+    fn diagnoses_invalid_section_order_and_known_command_arguments() {
+        let source = "\
+[DISABLE]
+alloc(storage)
+[ENABLE]
+define(value)
+[ENABLE]
+";
+        let document = Document::parse(source.into()).unwrap();
+
+        let diagnostics = document.diagnostics();
+        let messages: Vec<_> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect();
+
+        assert!(messages.contains(&"invalid section usage: [disable]"));
+        assert!(messages.contains(&"invalid section usage: [enable]"));
+        assert!(messages.contains(&"invalid arguments for `alloc`: received 1"));
+        assert!(messages.contains(&"invalid arguments for `define`: received 1"));
     }
 }

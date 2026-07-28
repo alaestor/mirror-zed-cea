@@ -12,11 +12,14 @@ Assembler (`.cea`) scripts, including embedded Lua sections.
 - Lua syntax highlighting inside `{$lua}` regions
 - Error-tolerant parsing while scripts are incomplete
 - Document symbols for sections, labels, allocations, and definitions
-- Parser diagnostics for malformed CEA structure
+- Workspace completion, definitions, references, and rename for CEA symbols
+- CEA diagnostics for malformed structure, invalid command usage, duplicate
+  declarations, and unresolved explicit symbol references
+- Cross-language references from Lua address APIs such as `getAddress("symbol")`
 
-The standalone CEA language server is editor-independent. Lua language-server
-proxying is not implemented yet, and assembly LSP integration is intentionally
-out of scope. See [TODO.md](TODO.md) for the remaining roadmap.
+The standalone CEA language server is editor-independent. Assembly LSP
+integration is intentionally out of scope. See [TODO.md](TODO.md) for the
+remaining roadmap.
 
 ## Language server
 
@@ -36,8 +39,8 @@ nix develop -c cargo run --manifest-path server/Cargo.toml
 
 The server communicates using standard LSP over stdin and stdout. It supports
 full-text document synchronization, CEA and embedded Lua diagnostics, document
-symbols, Lua completion, hover, signature help, definitions, references, rename,
-code actions, and inlay hints.
+symbols, CEA and Lua completion, hover, signature help, definitions, references,
+rename, code actions, and inlay hints.
 Embedded Lua is proxied to `lua-language-server`, which shares the project
 workspace and can resolve standalone `.lua` and `.d.lua` files. The Zed
 extension resolves `cea-language-server` from the worktree shell's `PATH` and

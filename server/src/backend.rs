@@ -8,18 +8,18 @@ use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
         CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionItem,
-        CompletionOptions, CompletionParams, CompletionResponse, DeclarationCapability,
-        DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams,
-        DidOpenTextDocumentParams, DocumentHighlight, DocumentHighlightParams,
-        DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-        Hover, HoverParams, HoverProviderCapability, ImplementationProviderCapability,
-        InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintParams,
-        Location, MessageType, OneOf, PrepareRenameResponse, ReferenceParams, RenameOptions,
-        RenameParams, ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions,
-        SignatureHelpParams, TextDocumentPositionParams, TextDocumentSyncCapability,
-        TextDocumentSyncKind, TypeDefinitionProviderCapability, Url, WorkDoneProgressOptions,
-        WorkspaceEdit, WorkspaceFolder, WorkspaceFoldersServerCapabilities,
-        WorkspaceServerCapabilities,
+        CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
+        DeclarationCapability, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentHighlight,
+        DocumentHighlightParams, DocumentSymbolParams, DocumentSymbolResponse,
+        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+        ImplementationProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+        InlayHint, InlayHintParams, Location, MessageType, OneOf, PrepareRenameResponse,
+        ReferenceParams, RenameOptions, RenameParams, ServerCapabilities, ServerInfo,
+        SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextDocumentPositionParams,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+        TypeDefinitionProviderCapability, Url, WorkDoneProgressOptions, WorkspaceEdit,
+        WorkspaceFolder, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
     },
     Client, LanguageServer,
 };
@@ -28,6 +28,7 @@ use crate::document::Document;
 use crate::{
     diagnostics::DiagnosticPublisher,
     lua::{LuaConfig, LuaProxy},
+    symbol_index::{CeaSymbolKind, OccurrenceRole, WorkspaceSymbolIndex},
 };
 
 struct OpenDocument {
@@ -39,6 +40,7 @@ pub struct Backend {
     client: Client,
     diagnostics: DiagnosticPublisher,
     documents: RwLock<HashMap<Url, OpenDocument>>,
+    symbols: RwLock<WorkspaceSymbolIndex>,
     lua: RwLock<Option<LuaProxy>>,
     workspace_folders: Arc<RwLock<Vec<WorkspaceFolder>>>,
     lua_config: RwLock<LuaConfig>,
@@ -51,6 +53,7 @@ impl Backend {
             client,
             diagnostics,
             documents: RwLock::new(HashMap::new()),
+            symbols: RwLock::new(WorkspaceSymbolIndex::default()),
             lua: RwLock::new(None),
             workspace_folders: Arc::new(RwLock::new(Vec::new())),
             lua_config: RwLock::new(LuaConfig::default()),
@@ -60,13 +63,14 @@ impl Backend {
     async fn update_document(&self, uri: Url, text: String, version: i32, open: bool) {
         match Document::parse(text) {
             Ok(document) => {
-                let diagnostics = document.diagnostics();
                 let virtual_document = document.lua_virtual_document();
+                let symbol_index = document.symbol_index();
                 self.documents
                     .write()
                     .await
                     .insert(uri.clone(), OpenDocument { document, version });
-                self.diagnostics.set_cea(uri.clone(), diagnostics).await;
+                self.symbols.write().await.update(uri.clone(), symbol_index);
+                self.refresh_cea_diagnostics().await;
                 if let Some(lua) = self.lua.read().await.as_ref() {
                     if open {
                         lua.open(uri, version, virtual_document).await;
@@ -83,6 +87,24 @@ impl Backend {
                     )
                     .await;
             }
+        }
+    }
+
+    async fn refresh_cea_diagnostics(&self) {
+        let mut semantic = self.symbols.read().await.semantic_diagnostics();
+        let diagnostics: Vec<_> = self
+            .documents
+            .read()
+            .await
+            .iter()
+            .map(|(uri, document)| {
+                let mut diagnostics = document.document.diagnostics();
+                diagnostics.extend(semantic.remove(uri).unwrap_or_default());
+                (uri.clone(), diagnostics)
+            })
+            .collect();
+        for (uri, diagnostics) in diagnostics {
+            self.diagnostics.set_cea(uri, diagnostics).await;
         }
     }
 }
@@ -237,6 +259,8 @@ impl LanguageServer for Backend {
             .write()
             .await
             .remove(&params.text_document.uri);
+        self.symbols.write().await.remove(&params.text_document.uri);
+        self.refresh_cea_diagnostics().await;
         self.diagnostics.clear(params.text_document.uri).await;
     }
 
@@ -277,6 +301,7 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let source_uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
+        let native_items = self.native_completions().await;
         let response = self
             .lua_request(
                 "textDocument/completion",
@@ -285,19 +310,21 @@ impl LanguageServer for Backend {
                 params,
             )
             .await?;
-        Ok(response.map(|mut response| {
+        let mut response = response.unwrap_or_else(|| CompletionResponse::Array(Vec::new()));
+        {
             let items = match &mut response {
                 CompletionResponse::Array(items) => items,
                 CompletionResponse::List(list) => &mut list.items,
             };
-            for item in items {
+            for item in items.iter_mut() {
                 item.data = Some(serde_json::json!({
                     "ceaSourceUri": source_uri,
                     "luaData": item.data.take(),
                 }));
             }
-            response
-        }))
+            items.extend(native_items);
+        }
+        Ok(Some(response))
     }
 
     async fn completion_resolve(&self, mut params: CompletionItem) -> Result<CompletionItem> {
@@ -360,6 +387,9 @@ impl LanguageServer for Backend {
             .uri
             .clone();
         let position = params.text_document_position_params.position;
+        if let Some(locations) = self.native_definitions(&source_uri, position).await {
+            return Ok(Some(GotoDefinitionResponse::Array(locations)));
+        }
         self.lua_request(
             "textDocument/definition",
             &source_uri,
@@ -379,6 +409,9 @@ impl LanguageServer for Backend {
             .uri
             .clone();
         let position = params.text_document_position_params.position;
+        if let Some(locations) = self.native_definitions(&source_uri, position).await {
+            return Ok(Some(GotoDeclarationResponse::Array(locations)));
+        }
         self.lua_request(
             "textDocument/declaration",
             &source_uri,
@@ -429,6 +462,12 @@ impl LanguageServer for Backend {
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let source_uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
+        if let Some(locations) = self
+            .native_references(&source_uri, position, params.context.include_declaration)
+            .await
+        {
+            return Ok(Some(locations));
+        }
         self.lua_request(
             "textDocument/references",
             &source_uri,
@@ -448,6 +487,9 @@ impl LanguageServer for Backend {
             .uri
             .clone();
         let position = params.text_document_position_params.position;
+        if let Some(highlights) = self.native_highlights(&source_uri, position).await {
+            return Ok(Some(highlights));
+        }
         self.lua_request(
             "textDocument/documentHighlight",
             &source_uri,
@@ -463,6 +505,18 @@ impl LanguageServer for Backend {
     ) -> Result<Option<PrepareRenameResponse>> {
         let source_uri = params.text_document.uri.clone();
         let position = params.position;
+        if let Some(occurrence) = self
+            .symbols
+            .read()
+            .await
+            .occurrence_at(&source_uri, position)
+            .cloned()
+        {
+            return Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
+                range: occurrence.range,
+                placeholder: occurrence.name,
+            }));
+        }
         self.lua_request(
             "textDocument/prepareRename",
             &source_uri,
@@ -475,6 +529,12 @@ impl LanguageServer for Backend {
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let source_uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
+        if let Some(edit) = self
+            .native_rename(&source_uri, position, &params.new_name)
+            .await
+        {
+            return Ok(Some(edit));
+        }
         self.lua_request("textDocument/rename", &source_uri, Some(position), params)
             .await
     }
@@ -501,6 +561,110 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
+    async fn native_completions(&self) -> Vec<CompletionItem> {
+        let index = self.symbols.read().await;
+        index
+            .symbol_names()
+            .into_iter()
+            .map(|name| {
+                let kind = index
+                    .declarations_named(&name)
+                    .first()
+                    .map(|indexed| completion_kind(indexed.occurrence.kind));
+                CompletionItem {
+                    label: name.clone(),
+                    kind,
+                    detail: Some("CEA symbol".into()),
+                    sort_text: Some(format!("0_{name}")),
+                    ..CompletionItem::default()
+                }
+            })
+            .collect()
+    }
+
+    async fn native_definitions(
+        &self,
+        source_uri: &Url,
+        position: tower_lsp::lsp_types::Position,
+    ) -> Option<Vec<Location>> {
+        let index = self.symbols.read().await;
+        let name = index.occurrence_at(source_uri, position)?.name.clone();
+        let locations: Vec<_> = index
+            .declarations_named(&name)
+            .into_iter()
+            .map(|indexed| Location::new(indexed.uri, indexed.occurrence.range))
+            .collect();
+        (!locations.is_empty()).then_some(locations)
+    }
+
+    async fn native_references(
+        &self,
+        source_uri: &Url,
+        position: tower_lsp::lsp_types::Position,
+        include_declaration: bool,
+    ) -> Option<Vec<Location>> {
+        let index = self.symbols.read().await;
+        let name = index.occurrence_at(source_uri, position)?.name.clone();
+        let locations = index
+            .occurrences_named(&name)
+            .into_iter()
+            .filter(|indexed| {
+                include_declaration
+                    || !matches!(
+                        indexed.occurrence.role,
+                        OccurrenceRole::Declaration | OccurrenceRole::Definition
+                    )
+            })
+            .map(|indexed| Location::new(indexed.uri, indexed.occurrence.range))
+            .collect();
+        Some(locations)
+    }
+
+    async fn native_highlights(
+        &self,
+        source_uri: &Url,
+        position: tower_lsp::lsp_types::Position,
+    ) -> Option<Vec<DocumentHighlight>> {
+        let index = self.symbols.read().await;
+        let name = index.occurrence_at(source_uri, position)?.name.clone();
+        Some(
+            index
+                .occurrences_named(&name)
+                .into_iter()
+                .filter(|indexed| indexed.uri == *source_uri)
+                .map(|indexed| DocumentHighlight {
+                    range: indexed.occurrence.range,
+                    kind: None,
+                })
+                .collect(),
+        )
+    }
+
+    async fn native_rename(
+        &self,
+        source_uri: &Url,
+        position: tower_lsp::lsp_types::Position,
+        new_name: &str,
+    ) -> Option<WorkspaceEdit> {
+        if !valid_symbol_name(new_name) {
+            return None;
+        }
+        let index = self.symbols.read().await;
+        let name = index.occurrence_at(source_uri, position)?.name.clone();
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        for indexed in index.occurrences_named(&name) {
+            changes.entry(indexed.uri).or_default().push(TextEdit {
+                range: indexed.occurrence.range,
+                new_text: new_name.to_owned(),
+            });
+        }
+        Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        })
+    }
+
     async fn lua_request<P, R>(
         &self,
         method: &str,
@@ -530,4 +694,21 @@ impl Backend {
             .transpose()
             .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
     }
+}
+
+fn completion_kind(kind: CeaSymbolKind) -> CompletionItemKind {
+    match kind {
+        CeaSymbolKind::Definition => CompletionItemKind::CONSTANT,
+        CeaSymbolKind::Label => CompletionItemKind::REFERENCE,
+        CeaSymbolKind::Allocation | CeaSymbolKind::Registered => CompletionItemKind::VARIABLE,
+    }
+}
+
+fn valid_symbol_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic() || "_?.$".contains(character))
+        && characters
+            .all(|character| character.is_ascii_alphanumeric() || "_.$?".contains(character))
 }

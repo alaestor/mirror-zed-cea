@@ -2,6 +2,7 @@ mod backend;
 mod diagnostics;
 mod document;
 mod lua;
+mod symbol_index;
 
 use backend::Backend;
 use tower_lsp::{LspService, Server};

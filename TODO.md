@@ -168,22 +168,20 @@ advertised its own capabilities. Lua regions retain Tree-sitter highlighting.
 
 ### 5. Build native CEA intelligence
 
-- [ ] Create a shared CEA symbol index for labels, allocations, definitions, and
+- [x] Create a shared CEA symbol index for labels, allocations, definitions, and
   registered symbols.
-- [ ] Use the index for completion, go-to-definition, references, and rename.
-- [ ] Diagnose duplicate declarations, unresolved symbols, invalid section usage,
+- [x] Use the index for completion, go-to-definition, references, and rename.
+- [x] Diagnose duplicate declarations, unresolved symbols, invalid section usage,
   malformed mode transitions, and invalid command arguments.
-- [ ] Link CEA declarations to Lua APIs that refer to symbols by string, such as
+- [x] Link CEA declarations to Lua APIs that refer to symbols by string, such as
   `getAddress("playerHealth")`.
 
-The recommended next milestone is the native CEA symbol index. It unlocks
-several editor features through one shared architecture and provides the basis
-for reliable cross-language references.
+The native CEA symbol index now provides one shared architecture for editor
+features, semantic diagnostics, and cross-language references.
 
 ## CEA-aware features
 
-The language server should eventually provide native CEA intelligence rather
-than acting only as a Lua proxy:
+The language server provides native CEA intelligence alongside its Lua proxy:
 
 - Completion and go-to-definition for known CEA symbols.
 - Diagnostics for duplicate declarations, unresolved symbols, and malformed
