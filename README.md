@@ -12,7 +12,9 @@ Zed language support for Cheat Engine Auto Assembler (`.cea`) scripts with embed
 
 Semantic tokens and assembly language-server integration are not supported.
 
-> [!note] Known Limitation
+> [!NOTE]
+>
+> **Known Limitation:**
 > 
 > Because we use virtual files to manage the Lua language server: saved standalone Lua changes are visible to the managed LuaLS through the filesystem, but unsaved standalone Lua changes are isolated in Zed's separate LuaLS process until saved. Though, this is rarely experienced as a problem thanks to Zed's default low-delay for auto-saving.
 
