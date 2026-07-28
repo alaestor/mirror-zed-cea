@@ -147,8 +147,8 @@ advertised its own capabilities. Lua regions retain Tree-sitter highlighting.
 - [ ] Add integration fixtures for CEA references into project `.lua` files,
   `.d.lua` declarations, `require` targets, and external `LUA_PATH` libraries.
 - [ ] Cover both `?.lua` and `?/init.lua` module layouts.
-- [ ] Resolve relative `LUA_PATH` roots against the workspace.
-- [ ] Implement Lua's empty `;;` default-path semantics.
+- [x] Resolve relative `LUA_PATH` roots against the workspace.
+- [x] Implement Lua's empty `;;` default-path semantics.
 - [ ] Test multiple CEA files sharing Lua declarations.
 - [ ] Expand coverage for LF, CRLF, non-ASCII text, malformed mode transitions,
   and multiple embedded Lua regions.

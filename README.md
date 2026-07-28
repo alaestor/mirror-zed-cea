@@ -46,7 +46,8 @@ launches it directly.
 Both `cea-language-server` and `lua-language-server` must be available on
 Zed's `PATH`. Set `CEA_LUA_LANGUAGE_SERVER` to override the LuaLS executable.
 When `LUA_PATH` is present, its module patterns and library roots are forwarded
-to LuaLS.
+to LuaLS. Relative entries are resolved from the first workspace folder, and
+Lua's `;;` marker expands to the default `?.lua` and `?/init.lua` layouts.
 
 The root Cargo package is the small Zed WebAssembly extension. The native
 language server remains an independent Cargo package under `server/`.
