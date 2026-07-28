@@ -71,6 +71,14 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
         true
     );
     assert_eq!(
+        initialize["result"]["capabilities"]["renameProvider"]["prepareProvider"],
+        true
+    );
+    assert_eq!(
+        initialize["result"]["capabilities"]["codeActionProvider"],
+        true
+    );
+    assert_eq!(
         initialize["result"]["capabilities"]["workspace"]["workspaceFolders"]["supported"],
         true
     );

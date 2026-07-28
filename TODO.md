@@ -132,7 +132,7 @@ before expanding the feature surface.
 - [x] Add completion-item resolution.
 - [x] Forward declaration, type-definition, implementation, and document-highlight
   requests.
-- [ ] Add rename and code actions after workspace-edit URI and range translation is
+- [x] Add rename and code actions after workspace-edit URI and range translation is
   reliable.
 - [ ] Evaluate semantic tokens and inlay hints after the core proxy operations are
   stable.

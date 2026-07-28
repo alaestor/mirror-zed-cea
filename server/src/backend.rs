@@ -7,16 +7,18 @@ use tower_lsp::lsp_types::request::{
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
-        DeclarationCapability, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentHighlight,
-        DocumentHighlightParams, DocumentSymbolParams, DocumentSymbolResponse,
-        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
-        ImplementationProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-        Location, MessageType, OneOf, ReferenceParams, ServerCapabilities, ServerInfo,
-        SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextDocumentSyncCapability,
-        TextDocumentSyncKind, TypeDefinitionProviderCapability, Url, WorkspaceFolder,
-        WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+        CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionItem,
+        CompletionOptions, CompletionParams, CompletionResponse, DeclarationCapability,
+        DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams,
+        DidOpenTextDocumentParams, DocumentHighlight, DocumentHighlightParams,
+        DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
+        Hover, HoverParams, HoverProviderCapability, ImplementationProviderCapability,
+        InitializeParams, InitializeResult, InitializedParams, Location, MessageType, OneOf,
+        PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams, ServerCapabilities,
+        ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TypeDefinitionProviderCapability, Url, WorkDoneProgressOptions, WorkspaceEdit,
+        WorkspaceFolder, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
     },
     Client, LanguageServer,
 };
@@ -129,6 +131,11 @@ impl LanguageServer for Backend {
                 implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -431,6 +438,40 @@ impl LanguageServer for Backend {
         let position = params.text_document_position_params.position;
         self.lua_request(
             "textDocument/documentHighlight",
+            &source_uri,
+            Some(position),
+            params,
+        )
+        .await
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let source_uri = params.text_document.uri.clone();
+        let position = params.position;
+        self.lua_request(
+            "textDocument/prepareRename",
+            &source_uri,
+            Some(position),
+            params,
+        )
+        .await
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let source_uri = params.text_document_position.text_document.uri.clone();
+        let position = params.text_document_position.position;
+        self.lua_request("textDocument/rename", &source_uri, Some(position), params)
+            .await
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let source_uri = params.text_document.uri.clone();
+        let position = params.range.start;
+        self.lua_request(
+            "textDocument/codeAction",
             &source_uri,
             Some(position),
             params,
