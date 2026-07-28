@@ -1,4 +1,4 @@
-# CEA language tooling roadmap
+# LLM-Generated CEA language tooling roadmap
 
 This repository will remain a monorepo for the Zed extension, Tree-sitter
 grammar, and language server. Each component should nevertheless remain usable
@@ -48,12 +48,12 @@ endings. Lua content remains unchanged. This keeps line, column, and UTF-16
 coordinates aligned across the CEA and virtual documents, including documents
 with multiple Lua regions.
 
-Give each virtual document a `.lua` URI beside its source `.cea` path so LuaLS
-resolves relative modules as if the embedded code lived in the same directory.
-The URI is an in-memory identity and must never create a user-visible shadow
-file. Translate virtual URIs in LuaLS responses back to their source CEA URIs;
-leave URIs for real `.lua` and `.d.lua` files unchanged so navigation opens the
-real files.
+Give each virtual document its source `.cea` URI inside the private LuaLS
+process so LuaLS resolves relative modules from the source directory and
+recognizes the document as disk-backed during semantic diagnostic passes. The
+in-memory text remains the position-preserving Lua projection and must never
+overwrite the CEA file or create a user-visible shadow file. Leave URIs for real
+`.lua` and `.d.lua` files unchanged so navigation opens the real files.
 
 Launch LuaLS with the project directory as its workspace root so embedded Lua
 can resolve symbols from standalone project files, `require` targets, and
@@ -109,7 +109,7 @@ initially remain local to Zed's separate LuaLS process.
 - Add incremental synchronization, rename, code actions, semantic tokens, and
   automatic LuaLS installation only after the proxy design is stable.
 
-## LLM analysis and recommendations:
+## analysis and recommendations:
 
 The proxy foundation is functional. Prioritize correctness and resilience
 before expanding the feature surface.
@@ -121,10 +121,10 @@ before expanding the feature surface.
 - Forward request cancellation and discard abandoned pending responses.
 - Handle LuaLS client requests deliberately, especially
   `workspace/configuration` and dynamic capability registration.
-- Translate virtual URIs in diagnostic related information, nested response
-  fields, workspace edits, and other URI-bearing payloads.
+- Translate CEA document URIs in diagnostic related information, nested
+  response fields, workspace edits, and other URI-bearing payloads.
 - Support all workspace folders instead of selecting only the first.
-- Avoid virtual URI collisions when a real `<name>.cea.lua` file exists.
+- Ensure virtual text is never written back to the source `.cea` file.
 - Improve request timeout, child-process, and protocol error reporting.
 
 ### 2. Complete Lua feature forwarding

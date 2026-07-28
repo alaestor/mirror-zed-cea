@@ -134,7 +134,7 @@ impl LuaProxy {
     }
 
     pub async fn open(&self, source_uri: Url, version: i32, virtual_document: LuaVirtualDocument) {
-        let virtual_uri = virtual_uri(&source_uri);
+        let virtual_uri = lua_document_uri(&source_uri);
         self.documents.write().await.insert(
             virtual_uri.clone(),
             ProxyDocument {
@@ -163,7 +163,7 @@ impl LuaProxy {
         version: i32,
         virtual_document: LuaVirtualDocument,
     ) {
-        let virtual_uri = virtual_uri(&source_uri);
+        let virtual_uri = lua_document_uri(&source_uri);
         self.documents.write().await.insert(
             virtual_uri.clone(),
             ProxyDocument {
@@ -186,7 +186,7 @@ impl LuaProxy {
     }
 
     pub async fn close(&self, source_uri: &Url) {
-        let virtual_uri = virtual_uri(source_uri);
+        let virtual_uri = lua_document_uri(source_uri);
         self.documents.write().await.remove(&virtual_uri);
         let _ = self.sender.send(json!({
             "jsonrpc": "2.0",
@@ -204,7 +204,7 @@ impl LuaProxy {
         position: Option<Position>,
         mut params: Value,
     ) -> Result<Option<Value>, String> {
-        let virtual_uri = virtual_uri(source_uri);
+        let virtual_uri = lua_document_uri(source_uri);
         let documents = self.documents.read().await;
         let document = match documents.get(&virtual_uri) {
             Some(document) => document,
@@ -334,9 +334,10 @@ fn lua_path_configuration(lua_path: &str) -> (Vec<String>, Vec<String>) {
     (runtime_paths, libraries)
 }
 
-fn virtual_uri(source_uri: &Url) -> Url {
+fn lua_document_uri(source_uri: &Url) -> Url {
+    // Some LuaLS releases omit semantic diagnostics for nonexistent file URIs.
+    // This child server can safely overlay virtual Lua text on the real CEA URI.
     let mut uri = source_uri.clone();
-    uri.set_path(&format!("{}.lua", source_uri.path()));
     uri.set_query(None);
     uri.set_fragment(None);
     uri
@@ -530,12 +531,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn creates_virtual_uri_beside_source_document() {
+    fn uses_source_uri_for_virtual_document() {
         let source = Url::parse("file:///project/scripts/player.cea").unwrap();
 
         assert_eq!(
-            virtual_uri(&source).as_str(),
-            "file:///project/scripts/player.cea.lua"
+            lua_document_uri(&source).as_str(),
+            "file:///project/scripts/player.cea"
         );
     }
 

@@ -142,7 +142,7 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
 }
 
 #[test]
-fn forwards_embedded_lua_diagnostics_over_stdio() {
+fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
     if !command_exists("lua-language-server") {
         eprintln!("skipping Lua proxy integration test: lua-language-server is not on PATH");
         return;
@@ -226,6 +226,43 @@ fn forwards_embedded_lua_diagnostics_over_stdio() {
                 "textDocument": {
                     "uri": "file:///tmp/cea-lsp-proxy-test/proxy-fixture.cea",
                     "version": 2
+                },
+                "contentChanges": [{
+                    "text": "{$lua}\n[ENABLE]\n\nlocal enabled = true\n[DISABLE]\n\n---@param y number\n---@return number\nlocal function x(y)\n  return y + 1\nend\n\nx(\"hello\")\n"
+                }]
+            }
+        }),
+    );
+    let diagnostics = receive_matching(&mut stdout, |message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == "file:///tmp/cea-lsp-proxy-test/proxy-fixture.cea"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic["code"] == "param-type-mismatch")
+                })
+    });
+    assert_eq!(
+        diagnostics["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "param-type-mismatch")
+            .unwrap()["range"]["start"]["line"],
+        12
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": {
+                    "uri": "file:///tmp/cea-lsp-proxy-test/proxy-fixture.cea",
+                    "version": 3
                 },
                 "contentChanges": [{
                     "text": "{$lua}\nlocal proxy_value = 1\nprint(proxy_value)\n{$asm}\n"
