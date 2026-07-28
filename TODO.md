@@ -134,8 +134,13 @@ before expanding the feature surface.
   requests.
 - [x] Add rename and code actions after workspace-edit URI and range translation is
   reliable.
-- [ ] Evaluate semantic tokens and inlay hints after the core proxy operations are
+- [x] Evaluate semantic tokens and inlay hints after the core proxy operations are
   stable.
+
+Inlay hints are forwarded because their positions remain aligned in the virtual
+document. Semantic tokens remain disabled: their numeric token types depend on the
+legend negotiated with LuaLS, which currently starts after the CEA server has
+advertised its own capabilities. Lua regions retain Tree-sitter highlighting.
 
 ### 3. Validate cross-file behavior
 

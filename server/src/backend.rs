@@ -13,12 +13,13 @@ use tower_lsp::{
         DidOpenTextDocumentParams, DocumentHighlight, DocumentHighlightParams,
         DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
         Hover, HoverParams, HoverProviderCapability, ImplementationProviderCapability,
-        InitializeParams, InitializeResult, InitializedParams, Location, MessageType, OneOf,
-        PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams, ServerCapabilities,
-        ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TypeDefinitionProviderCapability, Url, WorkDoneProgressOptions, WorkspaceEdit,
-        WorkspaceFolder, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+        InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintParams,
+        Location, MessageType, OneOf, PrepareRenameResponse, ReferenceParams, RenameOptions,
+        RenameParams, ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions,
+        SignatureHelpParams, TextDocumentPositionParams, TextDocumentSyncCapability,
+        TextDocumentSyncKind, TypeDefinitionProviderCapability, Url, WorkDoneProgressOptions,
+        WorkspaceEdit, WorkspaceFolder, WorkspaceFoldersServerCapabilities,
+        WorkspaceServerCapabilities,
     },
     Client, LanguageServer,
 };
@@ -136,6 +137,7 @@ impl LanguageServer for Backend {
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 })),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -477,6 +479,14 @@ impl LanguageServer for Backend {
             params,
         )
         .await
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let source_uri = params.text_document.uri.clone();
+        // LuaLS sees a position-preserving document with non-Lua text masked out,
+        // so it can safely handle visible ranges that only partially overlap Lua.
+        self.lua_request("textDocument/inlayHint", &source_uri, None, params)
+            .await
     }
 }
 

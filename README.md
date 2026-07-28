@@ -36,7 +36,8 @@ nix develop -c cargo run --manifest-path server/Cargo.toml
 
 The server communicates using standard LSP over stdin and stdout. It supports
 full-text document synchronization, CEA and embedded Lua diagnostics, document
-symbols, Lua completion, hover, signature help, definitions, and references.
+symbols, Lua completion, hover, signature help, definitions, references, rename,
+code actions, and inlay hints.
 Embedded Lua is proxied to `lua-language-server`, which shares the project
 workspace and can resolve standalone `.lua` and `.d.lua` files. The Zed
 extension resolves `cea-language-server` from the worktree shell's `PATH` and

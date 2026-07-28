@@ -79,6 +79,10 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
         true
     );
     assert_eq!(
+        initialize["result"]["capabilities"]["inlayHintProvider"],
+        true
+    );
+    assert_eq!(
         initialize["result"]["capabilities"]["workspace"]["workspaceFolders"]["supported"],
         true
     );
