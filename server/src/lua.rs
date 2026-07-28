@@ -226,6 +226,7 @@ impl LuaProxy {
         if let Some(uri) = params.pointer_mut("/textDocument/uri") {
             *uri = json!(virtual_uri);
         }
+        params = translate_request_uris(params, source_uri, &virtual_uri);
 
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (response_sender, response_receiver) = oneshot::channel();
@@ -853,6 +854,53 @@ fn translate_response_uris(value: Value, documents: &HashMap<Url, ProxyDocument>
     translate_uri_fields(value, None, documents)
 }
 
+fn translate_request_uris(value: Value, source_uri: &Url, virtual_uri: &Url) -> Value {
+    translate_matching_uri_fields(value, None, source_uri, virtual_uri)
+}
+
+fn translate_matching_uri_fields(
+    mut value: Value,
+    field: Option<&str>,
+    source_uri: &Url,
+    virtual_uri: &Url,
+) -> Value {
+    match &mut value {
+        Value::String(string) => {
+            if field.is_some_and(is_uri_field) && string == source_uri.as_str() {
+                *string = virtual_uri.to_string();
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                *value =
+                    translate_matching_uri_fields(value.take(), field, source_uri, virtual_uri);
+            }
+        }
+        Value::Object(values) => {
+            let original = std::mem::take(values);
+            for (key, value) in original {
+                let field_name = key.clone();
+                let translated_key = if key == source_uri.as_str() {
+                    virtual_uri.to_string()
+                } else {
+                    key
+                };
+                values.insert(
+                    translated_key,
+                    translate_matching_uri_fields(
+                        value,
+                        Some(&field_name),
+                        source_uri,
+                        virtual_uri,
+                    ),
+                );
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
 fn translate_uri_fields(
     mut value: Value,
     field: Option<&str>,
@@ -1122,6 +1170,27 @@ mod tests {
         assert!(translated["changes"]
             .get(source_uri.as_str())
             .is_some_and(|changes| changes[0]["newText"] == virtual_uri.as_str()));
+    }
+
+    #[test]
+    fn translates_source_uris_in_resolve_requests_back_to_virtual_documents() {
+        let source_uri = Url::parse("file:///project/player.cea").unwrap();
+        let virtual_uri = Url::parse("file:///project/player.cea.lua").unwrap();
+        let request = json!({
+            "data": {
+                "uri": source_uri,
+                "targetUri": source_uri,
+                "unchanged": source_uri,
+                source_uri.as_str(): []
+            }
+        });
+
+        let translated = translate_request_uris(request, &source_uri, &virtual_uri);
+
+        assert_eq!(translated["data"]["uri"], virtual_uri.as_str());
+        assert_eq!(translated["data"]["targetUri"], virtual_uri.as_str());
+        assert_eq!(translated["data"]["unchanged"], source_uri.as_str());
+        assert!(translated["data"].get(virtual_uri.as_str()).is_some());
     }
 
     #[test]

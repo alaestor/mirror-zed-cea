@@ -1,15 +1,21 @@
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+use tower_lsp::lsp_types::request::{
+    GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
+    GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
+};
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-        DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-        Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-        InitializedParams, Location, MessageType, OneOf, ReferenceParams, ServerCapabilities,
-        ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-        TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkspaceFolder,
+        CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
+        DeclarationCapability, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentHighlight,
+        DocumentHighlightParams, DocumentSymbolParams, DocumentSymbolResponse,
+        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+        ImplementationProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+        Location, MessageType, OneOf, ReferenceParams, ServerCapabilities, ServerInfo,
+        SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextDocumentSyncCapability,
+        TextDocumentSyncKind, TypeDefinitionProviderCapability, Url, WorkspaceFolder,
         WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
     },
     Client, LanguageServer,
@@ -102,6 +108,7 @@ impl LanguageServer for Backend {
                 )),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(true),
                     trigger_characters: Some(
                         [".", ":", "'", "\"", "/", "@", "*", "#"]
                             .into_iter()
@@ -117,7 +124,11 @@ impl LanguageServer for Backend {
                     ..SignatureHelpOptions::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),
+                declaration_provider: Some(DeclarationCapability::Simple(true)),
+                type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -247,13 +258,50 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let source_uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
-        self.lua_request(
-            "textDocument/completion",
-            &source_uri,
-            Some(position),
-            params,
-        )
-        .await
+        let response = self
+            .lua_request(
+                "textDocument/completion",
+                &source_uri,
+                Some(position),
+                params,
+            )
+            .await?;
+        Ok(response.map(|mut response| {
+            let items = match &mut response {
+                CompletionResponse::Array(items) => items,
+                CompletionResponse::List(list) => &mut list.items,
+            };
+            for item in items {
+                item.data = Some(serde_json::json!({
+                    "ceaSourceUri": source_uri,
+                    "luaData": item.data.take(),
+                }));
+            }
+            response
+        }))
+    }
+
+    async fn completion_resolve(&self, mut params: CompletionItem) -> Result<CompletionItem> {
+        let Some(mut proxy_data) = params.data.take() else {
+            return Ok(params);
+        };
+        let Some(source_uri) = proxy_data
+            .get("ceaSourceUri")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|uri| Url::parse(uri).ok())
+        else {
+            params.data = Some(proxy_data);
+            return Ok(params);
+        };
+        params.data = proxy_data
+            .get_mut("luaData")
+            .map(serde_json::Value::take)
+            .filter(|data| !data.is_null());
+        let fallback = params.clone();
+        Ok(self
+            .lua_request("completionItem/resolve", &source_uri, None, params)
+            .await?
+            .unwrap_or(fallback))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -302,11 +350,87 @@ impl LanguageServer for Backend {
         .await
     }
 
+    async fn goto_declaration(
+        &self,
+        params: GotoDeclarationParams,
+    ) -> Result<Option<GotoDeclarationResponse>> {
+        let source_uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let position = params.text_document_position_params.position;
+        self.lua_request(
+            "textDocument/declaration",
+            &source_uri,
+            Some(position),
+            params,
+        )
+        .await
+    }
+
+    async fn goto_type_definition(
+        &self,
+        params: GotoTypeDefinitionParams,
+    ) -> Result<Option<GotoTypeDefinitionResponse>> {
+        let source_uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let position = params.text_document_position_params.position;
+        self.lua_request(
+            "textDocument/typeDefinition",
+            &source_uri,
+            Some(position),
+            params,
+        )
+        .await
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: GotoImplementationParams,
+    ) -> Result<Option<GotoImplementationResponse>> {
+        let source_uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let position = params.text_document_position_params.position;
+        self.lua_request(
+            "textDocument/implementation",
+            &source_uri,
+            Some(position),
+            params,
+        )
+        .await
+    }
+
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let source_uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
         self.lua_request(
             "textDocument/references",
+            &source_uri,
+            Some(position),
+            params,
+        )
+        .await
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let source_uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let position = params.text_document_position_params.position;
+        self.lua_request(
+            "textDocument/documentHighlight",
             &source_uri,
             Some(position),
             params,

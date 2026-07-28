@@ -129,8 +129,8 @@ before expanding the feature surface.
 
 ### 2. Complete Lua feature forwarding
 
-- [ ] Add completion-item resolution.
-- [ ] Forward declaration, type-definition, implementation, and document-highlight
+- [x] Add completion-item resolution.
+- [x] Forward declaration, type-definition, implementation, and document-highlight
   requests.
 - [ ] Add rename and code actions after workspace-edit URI and range translation is
   reliable.
