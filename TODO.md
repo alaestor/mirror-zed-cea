@@ -118,7 +118,7 @@ before expanding the feature surface.
 
 - [x] Restart LuaLS after an unexpected exit and resynchronize open virtual
   documents.
-- [ ] Forward request cancellation and discard abandoned pending responses.
+- [x] Forward request cancellation and discard abandoned pending responses.
 - [ ] Handle LuaLS client requests deliberately, especially
   `workspace/configuration` and dynamic capability registration.
 - [ ] Translate CEA document URIs in diagnostic related information, nested

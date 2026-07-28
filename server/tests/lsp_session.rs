@@ -424,6 +424,123 @@ fn restarts_lua_ls_and_resynchronizes_open_documents() {
     fs::remove_dir_all(fixture_dir).unwrap();
 }
 
+#[test]
+fn forwards_client_request_cancellation_to_lua_ls() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture_dir =
+        env::temp_dir().join(format!("cea-luals-cancel-{}-{nonce}", std::process::id()));
+    fs::create_dir_all(&fixture_dir).unwrap();
+    let fake_lua_ls = fixture_dir.join("fake-lua-language-server");
+    fs::write(&fake_lua_ls, FAKE_CANCELLATION_LUA_LS).unwrap();
+    fs::set_permissions(&fake_lua_ls, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
+        .env("CEA_LUA_LANGUAGE_SERVER", &fake_lua_ls)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "capabilities": {},
+                "processId": null,
+                "rootUri": null
+            }
+        }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 1);
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        }),
+    );
+    receive_matching(&mut stdout, |message| {
+        message["method"] == "window/logMessage"
+            && message["params"]["message"] == "Lua language server proxy initialized"
+    });
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": "file:///cancel-fixture.cea",
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": "{$lua}\nprint('cancel me')\n{$asm}\n"
+                }
+            }
+        }),
+    );
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "textDocument/hover",
+            "params": {
+                "textDocument": { "uri": "file:///cancel-fixture.cea" },
+                "position": { "line": 1, "character": 2 }
+            }
+        }),
+    );
+    receive_matching(&mut stdout, |message| {
+        message["method"] == "window/logMessage"
+            && message["params"]["message"] == "LuaLS: hover received"
+    });
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "$/cancelRequest",
+            "params": { "id": 5 }
+        }),
+    );
+    receive_matching(&mut stdout, |message| {
+        message["method"] == "window/logMessage"
+            && message["params"]["message"] == "LuaLS: cancellation received for 10"
+    });
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "shutdown",
+            "params": null
+        }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 6);
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "exit"
+        }),
+    );
+    drop(stdin);
+
+    assert!(child.wait().unwrap().success());
+    fs::remove_dir_all(fixture_dir).unwrap();
+}
+
 fn command_exists(command: &str) -> bool {
     env::var_os("PATH").is_some_and(|path| {
         env::split_paths(&path).any(|directory| Path::new(&directory).join(command).is_file())
@@ -462,6 +579,42 @@ while IFS= read -r header; do
         send '{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}'
     elif [[ "$body" == *'"method":"textDocument/didOpen"'* && "$launch_count" -eq 1 ]]; then
         exit 1
+    elif [[ "$body" == *'"method":"shutdown"'* ]]; then
+        send '{"jsonrpc":"2.0","id":2,"result":null}'
+    elif [[ "$body" == *'"method":"exit"'* ]]; then
+        exit 0
+    fi
+done
+"#;
+
+const FAKE_CANCELLATION_LUA_LS: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+
+send() {
+    local response="$1"
+    printf 'Content-Length: %s\r\n\r\n%s' "${#response}" "$response"
+}
+
+content_length=
+while IFS= read -r header; do
+    header="${header%$'\r'}"
+    if [[ -n "$header" ]]; then
+        if [[ "$header" == "Content-Length: "* ]]; then
+            content_length="${header#Content-Length: }"
+        fi
+        continue
+    fi
+
+    IFS= read -r -N "$content_length" body
+    content_length=
+    if [[ "$body" == *'"method":"initialize"'* ]]; then
+        send '{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true}}}'
+    elif [[ "$body" == *'"method":"textDocument/hover"'* ]]; then
+        printf 'hover received\n' >&2
+    elif [[ "$body" == *'"method":"$/cancelRequest"'* ]]; then
+        request_id="${body##*\"id\":}"
+        request_id="${request_id%%\}*}"
+        printf 'cancellation received for %s\n' "$request_id" >&2
     elif [[ "$body" == *'"method":"shutdown"'* ]]; then
         send '{"jsonrpc":"2.0","id":2,"result":null}'
     elif [[ "$body" == *'"method":"exit"'* ]]; then

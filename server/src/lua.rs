@@ -4,7 +4,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex, MutexGuard,
     },
 };
 
@@ -15,7 +15,7 @@ use tokio::{
         BufReader,
     },
     process::{Child, Command},
-    sync::{mpsc, oneshot, Mutex, RwLock},
+    sync::{mpsc, oneshot, RwLock},
     time::{sleep, timeout, Duration},
 };
 use tower_lsp::{
@@ -49,6 +49,27 @@ struct ProxyDocument {
 enum SupervisorCommand {
     Message(Value),
     Shutdown(oneshot::Sender<()>),
+}
+
+struct PendingRequestGuard {
+    request_id: u64,
+    pending: PendingRequests,
+    sender: mpsc::UnboundedSender<SupervisorCommand>,
+}
+
+impl Drop for PendingRequestGuard {
+    fn drop(&mut self) {
+        if lock_pending(&self.pending)
+            .remove(&self.request_id)
+            .is_some()
+        {
+            let _ = self
+                .sender
+                .send(SupervisorCommand::Message(cancel_request_message(
+                    self.request_id,
+                )));
+        }
+    }
 }
 
 pub struct LuaProxy {
@@ -195,10 +216,12 @@ impl LuaProxy {
 
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (response_sender, response_receiver) = oneshot::channel();
-        self.pending
-            .lock()
-            .await
-            .insert(request_id, response_sender);
+        lock_pending(&self.pending).insert(request_id, response_sender);
+        let _request_guard = PendingRequestGuard {
+            request_id,
+            pending: self.pending.clone(),
+            sender: self.sender.clone(),
+        };
         if self
             .sender
             .send(SupervisorCommand::Message(json!({
@@ -209,7 +232,6 @@ impl LuaProxy {
             })))
             .is_err()
         {
-            self.pending.lock().await.remove(&request_id);
             return Err("LuaLS stopped before receiving a request".into());
         }
 
@@ -235,6 +257,22 @@ impl LuaProxy {
     fn send(&self, message: Value) {
         let _ = self.sender.send(SupervisorCommand::Message(message));
     }
+}
+
+fn lock_pending(
+    pending: &PendingRequests,
+) -> MutexGuard<'_, HashMap<u64, oneshot::Sender<Result<Value, String>>>> {
+    pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn cancel_request_message(request_id: u64) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "$/cancelRequest",
+        "params": { "id": request_id }
+    })
 }
 
 struct LuaProcess {
@@ -574,7 +612,7 @@ async fn read_messages(
 
         if message.get("method").is_none() {
             if let Some(id) = message.get("id").and_then(Value::as_u64) {
-                if let Some(response_sender) = context.pending.lock().await.remove(&id) {
+                if let Some(response_sender) = lock_pending(&context.pending).remove(&id) {
                     let result = if let Some(error) = message.get("error") {
                         Err(format!("LuaLS request failed: {error}"))
                     } else {
@@ -628,7 +666,7 @@ async fn read_messages(
     if let Some(initialized_sender) = initialized_sender {
         let _ = initialized_sender.send(Err("LuaLS exited before initialization".into()));
     }
-    for (_, response_sender) in context.pending.lock().await.drain() {
+    for (_, response_sender) in lock_pending(&context.pending).drain() {
         let _ = response_sender.send(Err("LuaLS exited".into()));
     }
     let _ = exited_sender.send(());
@@ -820,6 +858,40 @@ mod tests {
             message["params"]["textDocument"]["text"],
             "      \nprint('latest')\n"
         );
+    }
+
+    #[test]
+    fn cancels_and_discards_an_abandoned_pending_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (response_sender, _response_receiver) = oneshot::channel();
+        lock_pending(&pending).insert(42, response_sender);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+
+        drop(PendingRequestGuard {
+            request_id: 42,
+            pending: pending.clone(),
+            sender,
+        });
+
+        assert!(lock_pending(&pending).is_empty());
+        let SupervisorCommand::Message(message) = receiver.try_recv().unwrap() else {
+            panic!("abandoning a request must forward a cancellation notification");
+        };
+        assert_eq!(message, cancel_request_message(42));
+    }
+
+    #[test]
+    fn does_not_cancel_a_request_that_already_completed() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+
+        drop(PendingRequestGuard {
+            request_id: 42,
+            pending,
+            sender,
+        });
+
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
