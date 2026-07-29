@@ -1,203 +1,233 @@
-# LLM-Generated CEA language tooling roadmap
+# Post-LLM-Review: CEA language tooling roadmap
 
-This repository will remain a monorepo for the Zed extension, Tree-sitter
-grammar, and language server. Each component should nevertheless remain usable
-on its own, without depending on Zed.
+This monorepo contains three closely related deliverables:
 
-Planned components:
+- `grammar/`: the reusable Tree-sitter CEA grammar;
+- `server/`: the standalone, editor-agnostic CEA language server; and
+- `languages/cea/`, `extension.toml`, and `src/`: the Zed integration.
 
-- `grammar/`: the Tree-sitter CEA grammar and its tests.
-- `server/`: a standalone CEA language server.
-- `languages/cea/` and `extension.toml`: the Zed integration that consumes the
-  grammar and launches the language server.
+Keep them together while they share a release cycle. The grammar and language
+server should remain usable without Zed, and the server must continue to speak
+standard LSP over stdio without Zed-specific behavior.
 
-The flake should expose components as separate package outputs so other editors
-and tools can consume the grammar or language server independently. The
-language server must speak standard LSP over stdio and contain no Zed-specific
-behavior.
+## Current baseline
 
-## Implemented foundation
+The initial architecture is implemented:
 
-- Standalone Rust language server under `server/`.
-- Full-text document synchronization and Tree-sitter parsing.
-- Parse diagnostics with UTF-16-compatible source ranges.
-- Document symbols for sections, labels, allocations, and definitions.
-- Unit and end-to-end stdio protocol tests.
-- Separate `cea-language-server` and `tree-sitter-cea` flake package outputs.
-- Zed extension launcher that resolves `cea-language-server` from `PATH`.
-- Position-preserving virtual documents for embedded Lua regions.
-- Managed LuaLS process with project workspace and `LUA_PATH` configuration.
-- Embedded Lua diagnostics, completion, hover, signature help, definitions,
-  and references with virtual URI translation.
+- error-tolerant CEA parsing, highlighting, and structural diagnostics;
+- document symbols and an open-document CEA symbol index;
+- native CEA completion, navigation, references, highlights, rename, and
+  cross-language links from direct Lua address API calls;
+- position-preserving virtual Lua documents;
+- a supervised, restartable private LuaLS process;
+- embedded Lua diagnostics, completion, hover, signature help, navigation,
+  references, rename, code actions, and inlay hints;
+- project Lua runtime paths, workspace libraries, inherited `LUA_PATH`, and
+  multiple workspace folders;
+- standalone Nix packages for the server and grammar; and
+- unit, Tree-sitter corpus, and stdio integration coverage.
 
-## Language server
+The roadmap below contains remaining work rather than a history of completed
+milestones.
 
-Zed's Tree-sitter injections parse and highlight Lua regions, but Zed does not
-currently forward completions, diagnostics, hover, or navigation requests for
-injected ranges to a Lua language server. The generic implementation proposed
-in [zed#46870](https://github.com/zed-industries/zed/pull/46870) was closed
-unmerged.
+## Priority 0: restore a trustworthy LuaLS integration baseline
 
-Build a CEA language server that owns the mixed document and proxies embedded
-Lua requests to its own `lua-language-server` process. Zed's regular Lua
-language server is a separate process and cannot be reused directly.
+The stdio test
+`resolves_definitions_across_workspace_and_lua_path_fixtures` currently returns
+a null first definition with LuaLS `3.18.2-dev`, while the other integration
+tests pass.
 
-For each open CEA document, the server should construct a virtual Lua document
-by replacing non-Lua characters with spaces while preserving the original line
-endings. Lua content remains unchanged. This keeps line, column, and UTF-16
-coordinates aligned across the CEA and virtual documents, including documents
-with multiple Lua regions.
+- [ ] Determine whether the failure is a LuaLS workspace-index readiness race,
+  a configuration change, or a module-resolution regression.
+- [ ] Make the test wait for an observable ready condition or use a bounded retry
+  only around asynchronous indexing; do not add an unconditional sleep.
+- [ ] Verify direct `?.lua`, nested `?/init.lua`, external `LUA_PATH`, `.d.lua`,
+  and cross-CEA definitions independently so a failure identifies the affected
+  path.
+- [ ] Keep the test deterministic across the LuaLS version supplied by the
+  pinned `nixpkgs`.
 
-Give each virtual document its source `.cea` URI inside the private LuaLS
-process so LuaLS resolves relative modules from the source directory and
-recognizes the document as disk-backed during semantic diagnostic passes. The
-in-memory text remains the position-preserving Lua projection and must never
-overwrite the CEA file or create a user-visible shadow file. Leave URIs for real
-`.lua` and `.d.lua` files unchanged so navigation opens the real files.
+## Priority 1: bundle a versioned Cheat Engine Lua API library
 
-Launch LuaLS with the project directory as its workspace root so embedded Lua
-can resolve symbols from standalone project files, `require` targets, and
-`.d.lua` declaration files. Saved standalone Lua changes are visible to both
-Zed's LuaLS and the CEA server's LuaLS through the filesystem. Unsaved changes
-initially remain local to Zed's separate LuaLS process.
+Ship curated LuaLS declarations for the CE Lua environment. Start with the
+provided CE 7.7-oriented reference material, but keep only declarations and
+constants. Do not ship the stateful mock implementation; it's taken from
+another repo as reference. The canonical celua.txt from 7.7 has been included
+for cross-reference, but it's quite large so it should be used sparingly.
 
-### Lua proxy milestones
+### Declaration data
 
-#### 1. Session and virtual documents
+- [ ] Create a versioned declaration tree, for example:
 
-- Identify Lua regions using the CEA grammar.
-- Resolve and start `lua-language-server` from `PATH`.
-- Initialize LuaLS with the project workspace and inherited shell environment.
-- Construct position-preserving virtual Lua documents.
-- Synchronize CEA open, full-text change, and close notifications with LuaLS.
-- Shut down the child process cleanly and surface startup or protocol failures.
+  ```text
+  cheat-engine-api/
+    7.7/
+      manifest.json
+      core.d.lua
+      memory.d.lua
+      address-list.d.lua
+      mono.d.lua
+      ui.d.lua
+  ```
 
-#### 2. Workspace and module resolution
+- [ ] Mark every library file with `---@meta` and keep it free of runtime mocks
+  and side effects.
+- [ ] Remove ALCE-specific wording and resolve known cleanup items in the
+  references, including the duplicate `disableWithoutExecute` member, the
+  ambiguous `Type` alias, typos, and `METHOD_ATTRIBUTE_*` annotations currently
+  typed as `FieldAttribute`.
+- [ ] Record the snapshot's CE version, provenance, coverage, and known
+  uncertainties in its manifest. Describe 7.7 as a curated subset until its
+  coverage warrants a stronger claim.
+- [ ] Prefer complete snapshots per CE version initially. Introduce shared base
+  files or generated overlays only if multiple versions create meaningful
+  duplication.
 
-- Parse `LUA_PATH`, including `?.lua` and `?/init.lua` patterns.
-- Translate module patterns into LuaLS `Lua.runtime.path` configuration.
-- Add external library roots to `Lua.workspace.library`.
-- Index project `.lua` files and `.d.lua` declarations.
-- Preserve the virtual document's source directory for relative module
-  resolution.
-- Test `require` and definition lookup across CEA, project Lua, declaration
-  files, and external `LUA_PATH` libraries.
+Note: these recommendations originally included the following:
 
-#### 3. Diagnostics
+> - [ ] Convert primitive conceptual types such as addresses and symbol names to
+  documented aliases where LuaLS models aliases more accurately than classes.
 
-- Forward LuaLS diagnostics for virtual documents to their source CEA files.
-- Ignore diagnostics outside embedded Lua regions.
-- Clear stale diagnostics when regions change or documents close.
-- Preserve real Lua URIs for related information and definition locations.
+However, I'm hesitant. @class types, as demonstrated in the existing files,
+seems to provide more clear semantic meaning to the annotations and 
+helps detect simple errors early. Aliases are a bit too loose in terms of emitting
+diagnostics, however I might be mistaken. It's worth some experimentation to see
+if aliases are sufficient type information.
 
-#### 4. Interactive language features
+### Configuration
 
-- Forward completion, completion resolution, hover, and signature help inside
-  Lua regions.
-- Forward definition, declaration, type-definition, implementation, and
-  reference requests where URI and edit mapping are reliable.
-- Reject Lua requests made outside embedded regions.
+Add a CE API setting alongside the existing `luaLanguageServer` setting:
 
-#### 5. Hardening and later capabilities
+```json
+{
+  "lsp": {
+    "cea-language-server": {
+      "initialization_options": {
+        "cheatEngineApi": {
+          "enabled": true,
+          "version": "7.7"
+        },
+        "luaLanguageServer": {
+          "path": "lua-language-server",
+          "runtimeVersion": "LuaJIT",
+          "runtimePath": ["scripts/?.lua", "scripts/?/init.lua"],
+          "workspaceLibrary": ["types"]
+        }
+      }
+    }
+  }
+}
+```
 
-- Test LF and CRLF documents, non-ASCII text, malformed mode transitions,
-  multiple Lua regions, and LuaLS restarts.
-- Define CEA-specific configuration for LuaLS command, workspace libraries,
-  runtime version, and path overrides.
-- Evaluate synchronization of unsaved standalone `.lua` buffers without
-  registering a second competing Lua server in Zed.
-- Add incremental synchronization, rename, code actions, semantic tokens, and
-  automatic LuaLS installation only after the proxy design is stable.
+- [ ] Enable the only bundled version, initially 7.7, by default.
+- [ ] Support `enabled: false` for projects with their own complete declarations
+  or users who want an unmodified LuaLS environment.
+- [ ] Treat CE API version and Lua `runtimeVersion` as independent settings.
+- [ ] Select exact supported version strings and surface a clear diagnostic or
+  initialization warning for unsupported versions instead of silently falling
+  back.
+- [ ] Continue merging user `workspaceLibrary` entries so project-specific CE
+  extensions can coexist with the bundled declarations.
+- [ ] Document that configuration changes take effect after restarting the
+  language server; live CE-version switching is not required initially.
 
-## Recommendations
+### Packaging and LuaLS integration
 
-The proxy foundation is functional. Prioritize correctness and resilience
-before expanding the feature surface.
+LuaLS requires declaration files on disk. The language server is currently
+distributed as a standalone binary, so do not rely on every installation method
+preserving adjacent resource files.
 
-### 1. Harden the LuaLS proxy
+- [ ] Embed the declaration snapshots in the server binary.
+- [ ] Materialize the selected snapshot atomically into a deterministic cache
+  path keyed by CE version and content hash.
+- [ ] Reuse matching cached content, avoid writes inside the user's workspace,
+  and add the extracted directory to `Lua.workspace.library`.
+- [ ] Preserve stable declaration URIs so go-to-definition opens useful files.
+- [ ] Ensure LuaLS restart/resynchronization reuses the selected library.
 
-- [x] Restart LuaLS after an unexpected exit and resynchronize open virtual
-  documents.
-- [x] Forward request cancellation and discard abandoned pending responses.
-- [x] Handle LuaLS client requests deliberately, especially
-  `workspace/configuration` and dynamic capability registration.
-- [x] Translate CEA document URIs in diagnostic related information, nested
-  response fields, workspace edits, and other URI-bearing payloads.
-- [x] Support all workspace folders instead of selecting only the first.
-- [x] Ensure virtual text is never written back to the source `.cea` file.
-- [x] Improve request timeout, child-process, and protocol error reporting.
+### Tests
 
-### 2. Complete Lua feature forwarding
+- [ ] Validate manifests, supported versions, and declaration-only file content.
+- [ ] Unit-test default selection, disabled mode, unsupported versions, cache
+  extraction, and merging with explicit and inherited Lua paths/libraries.
+- [ ] Add LuaLS integration coverage for representative CE global completion,
+  hover, signature help, and go-to-definition.
+- [ ] Verify representative CE calls no longer produce undefined-global
+  diagnostics.
+- [ ] Verify disabling the bundled API restores ordinary LuaLS behavior.
 
-- [x] Add completion-item resolution.
-- [x] Forward declaration, type-definition, implementation, and document-highlight
-  requests.
-- [x] Add rename and code actions after workspace-edit URI and range translation is
-  reliable.
-- [x] Evaluate semantic tokens and inlay hints after the core proxy operations are
-  stable.
+## Priority 2: make native CEA intelligence workspace-complete
 
-Inlay hints are forwarded because their positions remain aligned in the virtual
-document. Semantic tokens remain disabled: their numeric token types depend on the
-legend negotiated with LuaLS, which currently starts after the CEA server has
-advertised its own capabilities. Lua regions retain Tree-sitter highlighting.
+The current `WorkspaceSymbolIndex` contains open documents only. Expand it to
+unopened `.cea` files so "workspace-aware" navigation has its conventional LSP
+meaning.
 
-### 3. Validate cross-file behavior
+- [ ] Discover `.cea` files under every workspace folder at initialization and
+  when folders are added.
+- [ ] Define sensible exclusions and limits so dependency, build, and very large
+  directory trees are not scanned without bound.
+- [ ] Register or consume watched-file changes for create, change, and delete.
+- [ ] Keep open-buffer contents authoritative over disk snapshots.
+- [ ] On close, fall back to the current on-disk file if it remains in a
+  workspace instead of dropping it from the index.
+- [ ] Cover definitions, references, rename, completion, duplicate diagnostics,
+  and file deletion across open and unopened files.
+- [ ] Until this is implemented, describe the native index accurately as
+  spanning open CEA documents.
 
-- [x] Add integration fixtures for CEA references into project `.lua` files,
-  `.d.lua` declarations, `require` targets, and external `LUA_PATH` libraries.
-- [x] Cover both `?.lua` and `?/init.lua` module layouts.
-- [x] Resolve relative `LUA_PATH` roots against the workspace.
-- [x] Implement Lua's empty `;;` default-path semantics.
-- [x] Test multiple CEA files sharing Lua declarations.
-- [x] Expand coverage for LF, CRLF, non-ASCII text, malformed mode transitions,
-  and multiple embedded Lua regions.
-- [x] Document that saved standalone Lua changes are visible through the
-  filesystem while unsaved changes remain isolated in Zed's separate LuaLS
-  process.
+## Priority 3: focused maintainability and UX
 
-### 4. Add user configuration
+- [ ] When feature work next touches `lua.rs`, separate configuration,
+  process/protocol supervision, and URI/diagnostic translation into modules.
+- [ ] Likewise, move native CEA feature handlers out of `backend.rs` when doing
+  so reduces the scope of an active change.
+- [ ] Improve the user-visible status when LuaLS is unavailable while preserving
+  native CEA features.
+- [ ] Review native completion context so CEA symbols are offered where useful
+  without overwhelming unrelated Lua or comment contexts.
+- [ ] Keep the README feature list, configuration schema, and actual capability
+  coverage synchronized.
 
-- [x] Expose settings for the LuaLS executable, runtime version, runtime paths, and
-  workspace libraries.
-- [x] Merge explicit project configuration with inherited `LUA_PATH` values.
-- [x] Keep child-LuaLS environment variables as convenient overrides while
-  allowing project behavior to be configured without relying on those
-  variables. The native CEA server still needs to be available to Zed, usually
-  through the worktree shell's `PATH`.
+## Priority 4: CEA-specific language features
 
-### 5. Build native CEA intelligence
+- [ ] .cea files must have both enable and disable sections to be valid.
+- [ ] `{$STRICT}` requires that labels be declared before usage in assembly.
 
-- [x] Create a shared CEA symbol index for labels, allocations, definitions, and
-  registered symbols.
-- [x] Use the index for completion, go-to-definition, references, and rename.
-- [x] Diagnose duplicate declarations, unresolved symbols, invalid section usage,
-  malformed mode transitions, and invalid command arguments.
-- [x] Link CEA declarations to Lua APIs that refer to symbols by string, such as
-  `getAddress("playerHealth")`.
+... more. This section should be expanded. Refer to:
+https://wiki.cheatengine.org/index.php?title=Cheat_Engine:Auto_Assembler
+mainly sections:
+- Assigning a Script to a CheatTable
+- Value Notation
+- General Information
 
-The native CEA symbol index now provides one shared architecture for editor
-features, semantic diagnostics, and cross-language references.
+And for the list of commands: https://wiki.cheatengine.org/index.php?title=Auto_Assembler:Commands
 
-## CEA-aware features
+Documentation is poor... I'll do what I can.
 
-The language server provides native CEA intelligence alongside its Lua proxy:
 
-- Completion and go-to-definition for known CEA symbols.
-- Diagnostics for duplicate declarations, unresolved symbols, and malformed
-  section or mode transitions.
-- References between CEA declarations and Lua APIs that name symbols, such as
-  `getAddress("symbol")`, where this can be determined reliably.
+## Deferred until evidence justifies them
 
-Assembly language-server integration remains out of scope.
+- Incremental Tree-sitter edits and incremental semantic-diagnostic updates.
+  Full synchronization is simpler and appropriate for typical CEA document
+  sizes until profiling shows otherwise.
+- Lua semantic-token forwarding. It requires correct legend negotiation or
+  translation; Tree-sitter already highlights injected Lua.
+- Synchronizing unsaved standalone `.lua` buffers between Zed's LuaLS and the
+  managed LuaLS process.
+- Assembly language-server integration.
+- Repository splitting.
 
-## Packaging
+These are not release blockers for the current product.
 
-- Initially allow users to provide `lua-language-server` on `PATH`; automated
-  discovery or installation can be added later.
-- Keep the standalone CEA language server available on `PATH` when launching
-  Zed.
+## Validation commands
 
-Separate repositories may be considered if the components develop independent
-release cycles or external consumers make that useful. Repository separation is
-not required for the initial implementation.
+Run the supported checks through the Nix development shell on NixOS:
+
+```sh
+nix develop -c cargo test --manifest-path server/Cargo.toml
+nix develop -c npm test
+nix develop -c cargo check
+```
+
+After changing `grammar/grammar.js`, run `npm run generate` in the development
+shell and commit the regenerated parser artifacts with the grammar change.
