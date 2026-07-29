@@ -717,7 +717,7 @@ fn provides_bundled_cheat_engine_api_intelligence() {
     let document_uri = Url::from_file_path(fixture_dir.join("api.cea"))
         .unwrap()
         .to_string();
-    let source = "[ENABLE]\n{$lua}\nlocal address = getAddress(\"player\")\nshowMessage(\"hello\")\nunknownCeGlobal()\n{$asm}\n[DISABLE]\n";
+    let source = "[ENABLE]\n{$lua}\nlocal address = getAddress(\"player\")\nshowMessage(\"hello\")\nunknownCeGlobal()\nlocal structure = createStructure(\"Player\")\n{$asm}\n[DISABLE]\n";
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
         .stdin(Stdio::piped())
@@ -773,6 +773,18 @@ fn provides_bundled_cheat_engine_api_intelligence() {
     let declaration_uri = definition_uri(&definition).unwrap();
     assert!(declaration_uri.contains("cheat-engine-api"));
     assert!(declaration_uri.ends_with("/core.d.lua"));
+
+    let definition = await_definition(
+        &mut stdin,
+        &mut stdout,
+        &mut request_id,
+        &document_uri,
+        5,
+        18,
+    );
+    let declaration_uri = definition_uri(&definition).unwrap();
+    assert!(declaration_uri.contains("cheat-engine-api"));
+    assert!(declaration_uri.ends_with("/structure.d.lua"));
 
     for (method, line, character, assertion) in [
         ("textDocument/hover", 2, 18, "getAddress"),

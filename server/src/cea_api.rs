@@ -55,6 +55,10 @@ const CE_77_FILES: &[(&str, &[u8])] = &[
         "ui.d.lua",
         include_bytes!("../../cheat-engine-api/7.7/ui.d.lua"),
     ),
+    (
+        "structure.d.lua",
+        include_bytes!("../../cheat-engine-api/7.7/structure.d.lua"),
+    ),
 ];
 
 const CE_77: Snapshot = Snapshot {

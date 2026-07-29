@@ -4,7 +4,7 @@
   "provenance": [
     "Cheat Engine 7.7 celua.txt"
   ],
-  "coverage": "Curated subset covering common memory, address-list, Mono, UI, and Auto Assembler APIs.",
+  "coverage": "Curated subset covering common memory, address-list, Mono, UI, structure-dissection, and Auto Assembler APIs.",
   "knownUncertainties": [
     "Some APIs accept additional overloads not represented here.",
     "Conceptual address and handle types are modeled as classes to retain type distinctions."
