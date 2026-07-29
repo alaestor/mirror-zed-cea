@@ -5,7 +5,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::Path,
     process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tower_lsp::lsp_types::Url;
 
@@ -52,6 +52,37 @@ fn definition_uri(response: &Value) -> Option<&str> {
                 .or_else(|| response["result"].get("targetUri"))
         })
         .and_then(Value::as_str)
+}
+
+fn await_definition(
+    stdin: &mut impl Write,
+    stdout: &mut impl BufRead,
+    request_id: &mut i64,
+    document_uri: &str,
+    line: u32,
+    character: u32,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        *request_id += 1;
+        send(
+            stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": *request_id,
+                "method": "textDocument/definition",
+                "params": {
+                    "textDocument": { "uri": document_uri },
+                    "position": { "line": line, "character": character }
+                }
+            }),
+        );
+        let response = receive_matching(stdout, |message| message["id"] == *request_id);
+        if definition_uri(&response).is_some() || Instant::now() >= deadline {
+            return response;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[test]
@@ -592,30 +623,26 @@ fn resolves_definitions_across_workspace_and_lua_path_fixtures() {
         }),
     );
 
-    for (id, line, character, expected_uri) in [
-        (10, 1, 24, direct_uri.as_str()),
-        (11, 2, 24, nested_uri.as_str()),
-        (12, 3, 25, external_uri.as_str()),
-        (13, 4, 2, declaration_uri.as_str()),
-        (14, 5, 2, first_uri.as_str()),
+    let mut request_id = 9;
+    for (description, line, character, expected_uri) in [
+        ("direct ?.lua module", 1, 24, direct_uri.as_str()),
+        ("nested ?/init.lua module", 2, 24, nested_uri.as_str()),
+        ("external LUA_PATH module", 3, 25, external_uri.as_str()),
+        (".d.lua declaration", 4, 2, declaration_uri.as_str()),
+        ("cross-CEA definition", 5, 2, first_uri.as_str()),
     ] {
-        send(
+        let definition = await_definition(
             &mut stdin,
-            json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "textDocument/definition",
-                "params": {
-                    "textDocument": { "uri": second_uri },
-                    "position": { "line": line, "character": character }
-                }
-            }),
+            &mut stdout,
+            &mut request_id,
+            &second_uri,
+            line,
+            character,
         );
-        let definition = receive_matching(&mut stdout, |message| message["id"] == id);
         assert_eq!(
             definition_uri(&definition),
             Some(expected_uri),
-            "unexpected definition response: {definition}"
+            "{description} returned an unexpected definition: {definition}"
         );
     }
 
