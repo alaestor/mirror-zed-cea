@@ -96,3 +96,15 @@ npm run build:zed-grammar
 Retry the installation so Zed uses the generated `grammars/cea.wasm`.
 
 I may look into how to improve the Nix install flow in the future, but for now this is sufficient for my personal use.
+
+## References
+
+Cheat Engine has been in closed-source development since August 2024. Until then it had been source-available under a proprietary license; not FOSS or OSI/OSD, as it was frequently misunderstood to be.
+
+- `celua.txt` is the Lua API documentation published with CE releases. The lua source files are shipped unobfuscated with CE releases and may be used as a source-of-truth behavioural reference (e.g. `monoscript.lua`); but the documentation is usually good enough for a quick grep.
+
+The following remote references may be outdated, but they're still the best references available. Important behaviour should be confirmed by manual testing in modern release.
+
+- [autoassembler.pas](https://raw.githubusercontent.com/cheat-engine/cheat-engine/refs/heads/master/Cheat%20Engine/autoassembler.pas) (handles AA)
+
+- [autoassemblercode.pas](https://raw.githubusercontent.com/cheat-engine/cheat-engine/refs/heads/master/Cheat%20Engine/autoassemblercode.pas) (handles `{$luacode}` and `{$ccode}`)
