@@ -1,6 +1,5 @@
 use std::{
     env, fs,
-    io::ErrorKind,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -116,9 +115,7 @@ fn materialize_at(
 
     match fs::rename(&temporary, &target) {
         Ok(()) => {}
-        Err(error)
-            if error.kind() == ErrorKind::AlreadyExists && cache_matches(&target, snapshot) =>
-        {
+        Err(_) if cache_matches(&target, snapshot) => {
             let _ = fs::remove_dir_all(&temporary);
         }
         Err(error) => {
@@ -182,6 +179,7 @@ fn snapshot_hash(snapshot: &Snapshot) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     fn temporary_directory(name: &str) -> PathBuf {
         env::temp_dir().join(format!(
@@ -231,6 +229,33 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.join("core.d.lua").is_file());
         assert!(first.join("manifest.json").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_installers_reuse_the_winning_snapshot() {
+        const INSTALLERS: usize = 16;
+
+        let root = temporary_directory("concurrent");
+        let barrier = Arc::new(Barrier::new(INSTALLERS));
+        let installers: Vec<_> = (0..INSTALLERS)
+            .map(|_| {
+                let root = root.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    materialize_at(&CheatEngineApiConfig::default(), &root)
+                })
+            })
+            .collect();
+
+        let paths: Vec<_> = installers
+            .into_iter()
+            .map(|installer| installer.join().unwrap().unwrap().unwrap())
+            .collect();
+
+        assert!(paths.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(cache_matches(&paths[0], &CE_77));
         fs::remove_dir_all(root).unwrap();
     }
 }
