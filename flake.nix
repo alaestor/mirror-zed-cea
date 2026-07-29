@@ -21,6 +21,7 @@
           source = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
+              ./cheat-engine-api
               ./grammar/src
               ./server
             ];

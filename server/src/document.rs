@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, DocumentSymbol, Position, Range, SymbolKind,
 };
 use tree_sitter::{ffi::TSLanguage, Language, Node, Parser, Point, Tree};
 
-use crate::symbol_index::DocumentSymbolIndex;
+use crate::symbol_index::{CeaSymbolKind, DocumentSymbolIndex, OccurrenceRole};
 
 extern "C" {
     fn tree_sitter_cea() -> *const TSLanguage;
@@ -37,6 +38,7 @@ impl Document {
         let mut diagnostics = Vec::new();
         collect_diagnostics(self.tree.root_node(), &self.source, &mut diagnostics, false);
         collect_structure_diagnostics(self.tree.root_node(), &self.source, &mut diagnostics);
+        collect_strict_diagnostics(&self.source, &self.symbol_index(), &mut diagnostics);
         diagnostics
     }
 
@@ -87,6 +89,29 @@ impl Document {
 
         LuaVirtualDocument { source, ranges }
     }
+
+    pub fn native_completion_allowed(&self, position: Position) -> bool {
+        if self
+            .lua_virtual_document()
+            .ranges
+            .iter()
+            .any(|range| range.start <= position && position < range.end)
+        {
+            return false;
+        }
+        let Some(line) = self.source.lines().nth(position.line as usize) else {
+            return false;
+        };
+        let prefix: String = line
+            .chars()
+            .scan(0_u32, |width, character| {
+                *width += character.len_utf16() as u32;
+                (*width <= position.character).then_some(character)
+            })
+            .collect();
+        let trimmed = prefix.trim_start();
+        !trimmed.starts_with("//") && !trimmed.starts_with("{$lua")
+    }
 }
 
 fn collect_structure_diagnostics(root: Node<'_>, source: &str, diagnostics: &mut Vec<Diagnostic>) {
@@ -120,6 +145,19 @@ fn collect_structure_diagnostics(root: Node<'_>, source: &str, diagnostics: &mut
             ));
         }
     }
+    let missing_range = Range::new(Position::new(0, 0), Position::new(0, 0));
+    if !enable_seen {
+        diagnostics.push(cea_diagnostic(
+            missing_range,
+            "missing required [ENABLE] section".into(),
+        ));
+    }
+    if !disable_seen {
+        diagnostics.push(cea_diagnostic(
+            missing_range,
+            "missing required [DISABLE] section".into(),
+        ));
+    }
 
     for command in commands {
         let Some(name_node) = command.child_by_field_name("name") else {
@@ -145,6 +183,37 @@ fn collect_structure_diagnostics(root: Node<'_>, source: &str, diagnostics: &mut
                 format!(
                     "invalid arguments for `{}`: received {count}",
                     node_text(name_node, source).unwrap_or_default()
+                ),
+            ));
+        }
+    }
+}
+
+fn collect_strict_diagnostics(
+    source: &str,
+    index: &DocumentSymbolIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !source.to_ascii_uppercase().contains("{$STRICT}") {
+        return;
+    }
+    let mut occurrences = index.occurrences().to_vec();
+    occurrences.sort_by_key(|occurrence| occurrence.range.start);
+    let mut declared_labels = HashSet::new();
+    for occurrence in occurrences {
+        if occurrence.kind != CeaSymbolKind::Label {
+            continue;
+        }
+        if occurrence.role == OccurrenceRole::Declaration {
+            declared_labels.insert(occurrence.name.to_ascii_lowercase());
+        } else if occurrence.role == OccurrenceRole::Definition
+            && !declared_labels.contains(&occurrence.name.to_ascii_lowercase())
+        {
+            diagnostics.push(cea_diagnostic(
+                occurrence.range,
+                format!(
+                    "`{{$STRICT}}` requires label `{}` to be declared before use",
+                    occurrence.name
                 ),
             ));
         }
@@ -382,7 +451,7 @@ dealloc(storage)
 
     #[test]
     fn accepts_valid_mixed_document_without_diagnostics() {
-        let source = "[ENABLE]\r\n{$lua}\r\nprint('ok')\r\n{$asm}\r\nlabel:\r\n";
+        let source = "[ENABLE]\r\n{$lua}\r\nprint('ok')\r\n{$asm}\r\nlabel:\r\n[DISABLE]\r\n";
         let document = Document::parse(source.into()).unwrap();
 
         assert!(document.diagnostics().is_empty());
@@ -460,5 +529,67 @@ define(value)
         assert!(messages.contains(&"invalid section usage: [enable]"));
         assert!(messages.contains(&"invalid arguments for `alloc`: received 1"));
         assert!(messages.contains(&"invalid arguments for `define`: received 1"));
+        assert!(!messages.contains(&"missing required [ENABLE] section"));
+        assert!(!messages.contains(&"missing required [DISABLE] section"));
+    }
+
+    #[test]
+    fn requires_enable_and_disable_sections() {
+        let document = Document::parse("nop\n".into()).unwrap();
+        let messages: Vec<_> = document
+            .diagnostics()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect();
+
+        assert!(messages.contains(&"missing required [ENABLE] section".into()));
+        assert!(messages.contains(&"missing required [DISABLE] section".into()));
+    }
+
+    #[test]
+    fn strict_requires_label_commands_above_label_definitions() {
+        let source = "\
+{$STRICT}
+[ENABLE]
+missing:
+label(ready)
+ready:
+too_late:
+label(too_late)
+jmp not_a_label_definition
+00400500:
+[ptr]:
+[DISABLE]
+";
+        let document = Document::parse(source.into()).unwrap();
+        let diagnostics = document.diagnostics();
+
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("label `missing` to be declared before use")));
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("label `too_late` to be declared before use")));
+        assert!(!diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("label `ready`")));
+        assert!(!diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("label `not_a_label_definition`")));
+        assert!(!diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("00400500")));
+    }
+
+    #[test]
+    fn limits_native_completion_to_assembly_code() {
+        let document = Document::parse(
+            "[ENABLE]\nmov eax,\n// shared\n{$lua}\nshared\n{$asm}\n[DISABLE]\n".into(),
+        )
+        .unwrap();
+
+        assert!(document.native_completion_allowed(Position::new(1, 8)));
+        assert!(!document.native_completion_allowed(Position::new(2, 5)));
+        assert!(!document.native_completion_allowed(Position::new(4, 3)));
     }
 }

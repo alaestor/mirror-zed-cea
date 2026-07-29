@@ -9,13 +9,9 @@ use std::{
     },
 };
 
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::{
-    io::{
-        AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
-        BufReader,
-    },
+    io::{AsyncBufReadExt, AsyncRead, BufReader},
     process::{Child, Command},
     sync::{mpsc, oneshot, RwLock},
     time::{sleep, timeout, Duration},
@@ -28,7 +24,18 @@ use tower_lsp::{
     Client,
 };
 
-use crate::{diagnostics::DiagnosticPublisher, document::LuaVirtualDocument};
+use crate::{cea_api, diagnostics::DiagnosticPublisher, document::LuaVirtualDocument};
+
+mod config;
+mod protocol;
+mod translation;
+
+pub use config::LuaConfig;
+use protocol::{read_message, write_message};
+use translation::{
+    contains, filter_lua_diagnostics, translate_diagnostic_uris, translate_request_uris,
+    translate_response_uris,
+};
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
 const FIRST_PROXY_REQUEST_ID: u64 = 10;
@@ -89,51 +96,18 @@ pub struct LuaProxy {
     next_request_id: AtomicU64,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LuaConfig {
-    path: Option<String>,
-    runtime_version: Option<String>,
-    #[serde(default)]
-    runtime_path: Vec<String>,
-    #[serde(default)]
-    workspace_library: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CeaOptions {
-    lua_language_server: LuaConfig,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum InitializationOptions {
-    Direct(CeaOptions),
-    Nested { cea: CeaOptions },
-}
-
-impl LuaConfig {
-    pub fn from_initialization_options(options: Option<Value>) -> Result<Self, String> {
-        let Some(options) = options else {
-            return Ok(Self::default());
-        };
-        serde_json::from_value::<InitializationOptions>(options)
-            .map(|options| match options {
-                InitializationOptions::Direct(options) => options.lua_language_server,
-                InitializationOptions::Nested { cea } => cea.lua_language_server,
-            })
-            .map_err(|error| format!("invalid cea.luaLanguageServer configuration: {error}"))
-    }
-}
-
 impl LuaProxy {
     pub async fn start(
         client: Client,
         diagnostics: DiagnosticPublisher,
         workspace_folders: Arc<RwLock<Vec<WorkspaceFolder>>>,
-        configuration: LuaConfig,
+        mut configuration: LuaConfig,
     ) -> Result<Self, String> {
+        if let Some(library) = cea_api::materialize(&configuration.cheat_engine_api)? {
+            configuration
+                .workspace_library
+                .push(library.to_string_lossy().into_owned());
+        }
         let configured_command = {
             let folders = workspace_folders.read().await;
             configuration
@@ -959,180 +933,6 @@ async fn log_stderr(stderr: impl AsyncRead + Unpin, client: Client) {
     }
 }
 
-fn contains(range: &Range, position: Position) -> bool {
-    position_tuple(range.start) <= position_tuple(position)
-        && position_tuple(position) < position_tuple(range.end)
-}
-
-fn filter_lua_diagnostics(
-    diagnostics: Vec<tower_lsp::lsp_types::Diagnostic>,
-    ranges: &[Range],
-) -> Vec<tower_lsp::lsp_types::Diagnostic> {
-    diagnostics
-        .into_iter()
-        .filter(|diagnostic| {
-            ranges
-                .iter()
-                .any(|range| contains(range, diagnostic.range.start))
-        })
-        .collect()
-}
-
-fn position_tuple(position: Position) -> (u32, u32) {
-    (position.line, position.character)
-}
-
-fn translate_diagnostic_uris(
-    mut diagnostics: Vec<tower_lsp::lsp_types::Diagnostic>,
-    documents: &HashMap<Url, ProxyDocument>,
-) -> Vec<tower_lsp::lsp_types::Diagnostic> {
-    for diagnostic in &mut diagnostics {
-        if let Some(related_information) = &mut diagnostic.related_information {
-            for related in related_information {
-                if let Some(document) = documents.get(&related.location.uri) {
-                    related.location.uri = document.source_uri.clone();
-                }
-            }
-        }
-        if let Some(data) = diagnostic.data.take() {
-            diagnostic.data = Some(translate_response_uris(data, documents));
-        }
-    }
-    diagnostics
-}
-
-fn translate_response_uris(value: Value, documents: &HashMap<Url, ProxyDocument>) -> Value {
-    translate_uri_fields(value, None, documents)
-}
-
-fn translate_request_uris(value: Value, source_uri: &Url, virtual_uri: &Url) -> Value {
-    translate_matching_uri_fields(value, None, source_uri, virtual_uri)
-}
-
-fn translate_matching_uri_fields(
-    mut value: Value,
-    field: Option<&str>,
-    source_uri: &Url,
-    virtual_uri: &Url,
-) -> Value {
-    match &mut value {
-        Value::String(string) => {
-            if field.is_some_and(is_uri_field) && string == source_uri.as_str() {
-                *string = virtual_uri.to_string();
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                *value =
-                    translate_matching_uri_fields(value.take(), field, source_uri, virtual_uri);
-            }
-        }
-        Value::Object(values) => {
-            let original = std::mem::take(values);
-            for (key, value) in original {
-                let field_name = key.clone();
-                let translated_key = if key == source_uri.as_str() {
-                    virtual_uri.to_string()
-                } else {
-                    key
-                };
-                values.insert(
-                    translated_key,
-                    translate_matching_uri_fields(
-                        value,
-                        Some(&field_name),
-                        source_uri,
-                        virtual_uri,
-                    ),
-                );
-            }
-        }
-        _ => {}
-    }
-    value
-}
-
-fn translate_uri_fields(
-    mut value: Value,
-    field: Option<&str>,
-    documents: &HashMap<Url, ProxyDocument>,
-) -> Value {
-    match &mut value {
-        Value::String(string) => {
-            if field.is_some_and(is_uri_field) {
-                if let Ok(uri) = Url::parse(string) {
-                    if let Some(document) = documents.get(&uri) {
-                        *string = document.source_uri.to_string();
-                    }
-                }
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                *value = translate_uri_fields(value.take(), field, documents);
-            }
-        }
-        Value::Object(values) => {
-            let original = std::mem::take(values);
-            for (key, value) in original {
-                let field_name = key.clone();
-                let translated_key = Url::parse(&key)
-                    .ok()
-                    .and_then(|uri| documents.get(&uri))
-                    .map(|document| document.source_uri.to_string())
-                    .unwrap_or(key);
-                values.insert(
-                    translated_key,
-                    translate_uri_fields(value, Some(&field_name), documents),
-                );
-            }
-        }
-        _ => {}
-    }
-    value
-}
-
-fn is_uri_field(field: &str) -> bool {
-    field == "uri" || field.ends_with("Uri")
-}
-
-async fn write_message(
-    writer: &mut (impl AsyncWrite + Unpin),
-    message: &Value,
-) -> std::io::Result<()> {
-    let body = message.to_string();
-    writer
-        .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
-        .await?;
-    writer.write_all(body.as_bytes()).await?;
-    writer.flush().await
-}
-
-async fn read_message(reader: &mut (impl AsyncBufRead + Unpin)) -> std::io::Result<Option<Value>> {
-    let mut content_length = None;
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).await? == 0 {
-            return Ok(None);
-        }
-        if header == "\r\n" {
-            break;
-        }
-        if let Some(value) = header.strip_prefix("Content-Length: ") {
-            content_length = value.trim().parse::<usize>().ok();
-        }
-    }
-
-    let length = content_length.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing Content-Length")
-    })?;
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body).await?;
-    serde_json::from_slice(&body)
-        .map(Some)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1207,7 +1007,34 @@ mod tests {
 
         assert_eq!(direct.path.as_deref(), Some("/tools/lua-language-server"));
         assert_eq!(direct.runtime_version.as_deref(), Some("LuaJIT"));
+        assert_eq!(direct.cheat_engine_api.version, "7.7");
+        assert!(direct.cheat_engine_api.enabled);
         assert_eq!(nested.runtime_path, ["scripts/?.lua"]);
+    }
+
+    #[test]
+    fn parses_disabled_cheat_engine_api_configuration() {
+        let config = LuaConfig::from_initialization_options(Some(json!({
+            "cheatEngineApi": { "enabled": false, "version": "7.7" },
+            "luaLanguageServer": {}
+        })))
+        .unwrap();
+
+        assert!(!config.cheat_engine_api.enabled);
+    }
+
+    #[test]
+    fn rejects_unsupported_cheat_engine_api_versions() {
+        let error = LuaConfig::from_initialization_options(Some(json!({
+            "cheatEngineApi": { "version": "8.0" },
+            "luaLanguageServer": {}
+        })))
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "unsupported Cheat Engine API version \"8.0\"; supported versions: 7.7"
+        );
     }
 
     #[test]
@@ -1233,7 +1060,7 @@ mod tests {
             LuaConfig::from_initialization_options(Some(json!({ "luaLanguageServer": [] })))
                 .unwrap_err();
 
-        assert!(error.starts_with("invalid cea.luaLanguageServer configuration:"));
+        assert!(error.starts_with("invalid CEA initialization options:"));
     }
 
     #[test]

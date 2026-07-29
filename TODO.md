@@ -37,14 +37,14 @@ The stdio test
 a null first definition with LuaLS `3.18.2-dev`, while the other integration
 tests pass.
 
-- [ ] Determine whether the failure is a LuaLS workspace-index readiness race,
+- [x] Determine whether the failure is a LuaLS workspace-index readiness race,
   a configuration change, or a module-resolution regression.
-- [ ] Make the test wait for an observable ready condition or use a bounded retry
+- [x] Make the test wait for an observable ready condition or use a bounded retry
   only around asynchronous indexing; do not add an unconditional sleep.
-- [ ] Verify direct `?.lua`, nested `?/init.lua`, external `LUA_PATH`, `.d.lua`,
+- [x] Verify direct `?.lua`, nested `?/init.lua`, external `LUA_PATH`, `.d.lua`,
   and cross-CEA definitions independently so a failure identifies the affected
   path.
-- [ ] Keep the test deterministic across the LuaLS version supplied by the
+- [x] Keep the test deterministic across the LuaLS version supplied by the
   pinned `nixpkgs`.
 
 ## Priority 1: bundle a versioned Cheat Engine Lua API library
@@ -57,7 +57,7 @@ for cross-reference, but it's quite large so it should be used sparingly.
 
 ### Declaration data
 
-- [ ] Create a versioned declaration tree, for example:
+- [x] Create a versioned declaration tree, for example:
 
   ```text
   cheat-engine-api/
@@ -70,16 +70,16 @@ for cross-reference, but it's quite large so it should be used sparingly.
       ui.d.lua
   ```
 
-- [ ] Mark every library file with `---@meta` and keep it free of runtime mocks
+- [x] Mark every library file with `---@meta` and keep it free of runtime mocks
   and side effects.
-- [ ] Remove ALCE-specific wording and resolve known cleanup items in the
+- [x] Remove ALCE-specific wording and resolve known cleanup items in the
   references, including the duplicate `disableWithoutExecute` member, the
   ambiguous `Type` alias, typos, and `METHOD_ATTRIBUTE_*` annotations currently
   typed as `FieldAttribute`.
-- [ ] Record the snapshot's CE version, provenance, coverage, and known
+- [x] Record the snapshot's CE version, provenance, coverage, and known
   uncertainties in its manifest. Describe 7.7 as a curated subset until its
   coverage warrants a stronger claim.
-- [ ] Prefer complete snapshots per CE version initially. Introduce shared base
+- [x] Prefer complete snapshots per CE version initially. Introduce shared base
   files or generated overlays only if multiple versions create meaningful
   duplication.
 
@@ -119,16 +119,16 @@ Add a CE API setting alongside the existing `luaLanguageServer` setting:
 }
 ```
 
-- [ ] Enable the only bundled version, initially 7.7, by default.
-- [ ] Support `enabled: false` for projects with their own complete declarations
+- [x] Enable the only bundled version, initially 7.7, by default.
+- [x] Support `enabled: false` for projects with their own complete declarations
   or users who want an unmodified LuaLS environment.
-- [ ] Treat CE API version and Lua `runtimeVersion` as independent settings.
-- [ ] Select exact supported version strings and surface a clear diagnostic or
+- [x] Treat CE API version and Lua `runtimeVersion` as independent settings.
+- [x] Select exact supported version strings and surface a clear diagnostic or
   initialization warning for unsupported versions instead of silently falling
   back.
-- [ ] Continue merging user `workspaceLibrary` entries so project-specific CE
+- [x] Continue merging user `workspaceLibrary` entries so project-specific CE
   extensions can coexist with the bundled declarations.
-- [ ] Document that configuration changes take effect after restarting the
+- [x] Document that configuration changes take effect after restarting the
   language server; live CE-version switching is not required initially.
 
 ### Packaging and LuaLS integration
@@ -137,24 +137,24 @@ LuaLS requires declaration files on disk. The language server is currently
 distributed as a standalone binary, so do not rely on every installation method
 preserving adjacent resource files.
 
-- [ ] Embed the declaration snapshots in the server binary.
-- [ ] Materialize the selected snapshot atomically into a deterministic cache
+- [x] Embed the declaration snapshots in the server binary.
+- [x] Materialize the selected snapshot atomically into a deterministic cache
   path keyed by CE version and content hash.
-- [ ] Reuse matching cached content, avoid writes inside the user's workspace,
+- [x] Reuse matching cached content, avoid writes inside the user's workspace,
   and add the extracted directory to `Lua.workspace.library`.
-- [ ] Preserve stable declaration URIs so go-to-definition opens useful files.
-- [ ] Ensure LuaLS restart/resynchronization reuses the selected library.
+- [x] Preserve stable declaration URIs so go-to-definition opens useful files.
+- [x] Ensure LuaLS restart/resynchronization reuses the selected library.
 
 ### Tests
 
-- [ ] Validate manifests, supported versions, and declaration-only file content.
-- [ ] Unit-test default selection, disabled mode, unsupported versions, cache
+- [x] Validate manifests, supported versions, and declaration-only file content.
+- [x] Unit-test default selection, disabled mode, unsupported versions, cache
   extraction, and merging with explicit and inherited Lua paths/libraries.
-- [ ] Add LuaLS integration coverage for representative CE global completion,
+- [x] Add LuaLS integration coverage for representative CE global completion,
   hover, signature help, and go-to-definition.
-- [ ] Verify representative CE calls no longer produce undefined-global
+- [x] Verify representative CE calls no longer produce undefined-global
   diagnostics.
-- [ ] Verify disabling the bundled API restores ordinary LuaLS behavior.
+- [x] Verify disabling the bundled API restores ordinary LuaLS behavior.
 
 ## Priority 2: make native CEA intelligence workspace-complete
 
@@ -162,36 +162,36 @@ The current `WorkspaceSymbolIndex` contains open documents only. Expand it to
 unopened `.cea` files so "workspace-aware" navigation has its conventional LSP
 meaning.
 
-- [ ] Discover `.cea` files under every workspace folder at initialization and
+- [x] Discover `.cea` files under every workspace folder at initialization and
   when folders are added.
-- [ ] Define sensible exclusions and limits so dependency, build, and very large
+- [x] Define sensible exclusions and limits so dependency, build, and very large
   directory trees are not scanned without bound.
-- [ ] Register or consume watched-file changes for create, change, and delete.
-- [ ] Keep open-buffer contents authoritative over disk snapshots.
-- [ ] On close, fall back to the current on-disk file if it remains in a
+- [x] Register or consume watched-file changes for create, change, and delete.
+- [x] Keep open-buffer contents authoritative over disk snapshots.
+- [x] On close, fall back to the current on-disk file if it remains in a
   workspace instead of dropping it from the index.
-- [ ] Cover definitions, references, rename, completion, duplicate diagnostics,
+- [x] Cover definitions, references, rename, completion, duplicate diagnostics,
   and file deletion across open and unopened files.
-- [ ] Until this is implemented, describe the native index accurately as
+- [x] Until this is implemented, describe the native index accurately as
   spanning open CEA documents.
 
 ## Priority 3: focused maintainability and UX
 
-- [ ] When feature work next touches `lua.rs`, separate configuration,
+- [x] When feature work next touches `lua.rs`, separate configuration,
   process/protocol supervision, and URI/diagnostic translation into modules.
-- [ ] Likewise, move native CEA feature handlers out of `backend.rs` when doing
+- [x] Likewise, move native CEA feature handlers out of `backend.rs` when doing
   so reduces the scope of an active change.
-- [ ] Improve the user-visible status when LuaLS is unavailable while preserving
+- [x] Improve the user-visible status when LuaLS is unavailable while preserving
   native CEA features.
-- [ ] Review native completion context so CEA symbols are offered where useful
+- [x] Review native completion context so CEA symbols are offered where useful
   without overwhelming unrelated Lua or comment contexts.
-- [ ] Keep the README feature list, configuration schema, and actual capability
+- [x] Keep the README feature list, configuration schema, and actual capability
   coverage synchronized.
 
 ## Priority 4: CEA-specific language features
 
-- [ ] .cea files must have both enable and disable sections to be valid.
-- [ ] `{$STRICT}` requires that labels be declared before usage in assembly.
+- [x] .cea files must have both enable and disable sections to be valid.
+- [x] `{$STRICT}` requires that labels be declared before usage in assembly.
 
 ... more. This section should be expanded. Refer to:
 https://wiki.cheatengine.org/index.php?title=Cheat_Engine:Auto_Assembler

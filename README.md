@@ -5,9 +5,10 @@ Zed language support for Cheat Engine Auto Assembler (`.cea`) scripts with embed
 ## Features
 
 - Error-tolerant Tree-sitter parsing and highlighting for Auto Assembler, x86/x64 operations, sections, directives, and embedded Lua
-- Document symbols and workspace-aware completion, definitions, references, highlights, and rename for CEA symbols
-- Diagnostics for malformed structure, invalid command arguments and section usage, duplicate declarations, and unresolved explicit symbol references
+- Document symbols and workspace-wide completion, definitions, references, highlights, and rename across open and unopened `.cea` files
+- Diagnostics for malformed structure, missing or invalid enable/disable sections, `{$STRICT}` label ordering, invalid command arguments, duplicate declarations, and unresolved explicit symbol references
 - Embedded Lua diagnostics, completion, hover, signature help, navigation, rename, code actions, and inlay hints through a managed `lua-language-server`
+- Bundled, versioned Cheat Engine 7.7 Lua API declarations for CE globals, memory, address-list, Mono, and UI APIs
 - Cross-language navigation from direct Lua calls such as `getAddress("playerHealth")`
 
 Semantic tokens and assembly language-server integration are not supported.
@@ -35,6 +36,10 @@ Configure the managed LuaLS with Zed's LSP initialization options:
   "lsp": {
     "cea-language-server": {
       "initialization_options": {
+        "cheatEngineApi": {
+          "enabled": true,
+          "version": "7.7"
+        },
         "luaLanguageServer": {
           "path": "lua-language-server",
           "runtimeVersion": "LuaJIT",
@@ -48,6 +53,8 @@ Configure the managed LuaLS with Zed's LSP initialization options:
 ```
 
 Paths may be absolute or relative to the first workspace folder. Explicit runtime paths and libraries are combined with inherited `LUA_PATH` entries. Relative `LUA_PATH` entries resolve from the workspace, and `;;` expands to Lua's default `?.lua` and `?/init.lua` layouts.
+
+The bundled Cheat Engine API snapshot is enabled by default. Set `cheatEngineApi.enabled` to `false` when a project supplies complete declarations of its own. Only the exact version `7.7` is currently supported; unsupported versions fail initialization with a clear error. The CE API version and Lua `runtimeVersion` are independent, and user workspace libraries are merged with the bundled declarations. Restart the CEA language server after changing these settings.
 
 `CEA_LUA_LANGUAGE_SERVER` overrides the configured executable path.
 

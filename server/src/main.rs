@@ -1,8 +1,10 @@
 mod backend;
+mod cea_api;
 mod diagnostics;
 mod document;
 mod lua;
 mod symbol_index;
+mod workspace;
 
 use backend::Backend;
 use tower_lsp::{LspService, Server};

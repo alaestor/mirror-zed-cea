@@ -414,8 +414,17 @@
         "type": "PREC",
         "value": 9,
         "content": {
-          "type": "PATTERN",
-          "value": "\\[[^\\r\\n]+:"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "PATTERN",
+              "value": "\\[[^\\r\\n]+:"
+            },
+            {
+              "type": "PATTERN",
+              "value": "[0-9][0-9A-Fa-f]*:"
+            }
+          ]
         }
       }
     },

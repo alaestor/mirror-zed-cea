@@ -9,15 +9,15 @@ use tower_lsp::{
     lsp_types::{
         CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionItem,
         CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
-        DeclarationCapability, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentHighlight,
-        DocumentHighlightParams, DocumentSymbolParams, DocumentSymbolResponse,
-        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
-        ImplementationProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-        InlayHint, InlayHintParams, Location, MessageType, OneOf, PrepareRenameResponse,
-        ReferenceParams, RenameOptions, RenameParams, ServerCapabilities, ServerInfo,
-        SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextDocumentPositionParams,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+        DeclarationCapability, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+        DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DocumentHighlight, DocumentHighlightParams, DocumentSymbolParams, DocumentSymbolResponse,
+        FileChangeType, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+        HoverProviderCapability, ImplementationProviderCapability, InitializeParams,
+        InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType,
+        OneOf, PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams,
+        ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
         TypeDefinitionProviderCapability, Url, WorkDoneProgressOptions, WorkspaceEdit,
         WorkspaceFolder, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
     },
@@ -29,6 +29,7 @@ use crate::{
     diagnostics::DiagnosticPublisher,
     lua::{LuaConfig, LuaProxy},
     symbol_index::{CeaSymbolKind, OccurrenceRole, WorkspaceSymbolIndex},
+    workspace,
 };
 
 struct OpenDocument {
@@ -40,6 +41,7 @@ pub struct Backend {
     client: Client,
     diagnostics: DiagnosticPublisher,
     documents: RwLock<HashMap<Url, OpenDocument>>,
+    disk_documents: RwLock<HashMap<Url, Document>>,
     symbols: RwLock<WorkspaceSymbolIndex>,
     lua: RwLock<Option<LuaProxy>>,
     workspace_folders: Arc<RwLock<Vec<WorkspaceFolder>>>,
@@ -53,6 +55,7 @@ impl Backend {
             client,
             diagnostics,
             documents: RwLock::new(HashMap::new()),
+            disk_documents: RwLock::new(HashMap::new()),
             symbols: RwLock::new(WorkspaceSymbolIndex::default()),
             lua: RwLock::new(None),
             workspace_folders: Arc::new(RwLock::new(Vec::new())),
@@ -92,7 +95,7 @@ impl Backend {
 
     async fn refresh_cea_diagnostics(&self) {
         let mut semantic = self.symbols.read().await.semantic_diagnostics();
-        let diagnostics: Vec<_> = self
+        let mut diagnostics: Vec<_> = self
             .documents
             .read()
             .await
@@ -103,6 +106,20 @@ impl Backend {
                 (uri.clone(), diagnostics)
             })
             .collect();
+        let open_uris: std::collections::HashSet<_> =
+            diagnostics.iter().map(|(uri, _)| uri.clone()).collect();
+        diagnostics.extend(
+            self.disk_documents
+                .read()
+                .await
+                .iter()
+                .filter(|(uri, _)| !open_uris.contains(*uri))
+                .map(|(uri, document)| {
+                    let mut diagnostics = document.diagnostics();
+                    diagnostics.extend(semantic.remove(uri).unwrap_or_default());
+                    (uri.clone(), diagnostics)
+                }),
+        );
         for (uri, diagnostics) in diagnostics {
             self.diagnostics.set_cea(uri, diagnostics).await;
         }
@@ -134,6 +151,14 @@ impl LanguageServer for Backend {
                 .unwrap_or_default()
         });
         *self.workspace_folders.write().await = workspace_folders;
+        let discovered = workspace::discover(&self.workspace_folders.read().await);
+        {
+            let mut symbols = self.symbols.write().await;
+            for (uri, document) in &discovered {
+                symbols.update(uri.clone(), document.symbol_index());
+            }
+        }
+        *self.disk_documents.write().await = discovered;
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -189,6 +214,7 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "CEA language server initialized")
             .await;
+        self.refresh_cea_diagnostics().await;
         match LuaProxy::start(
             self.client.clone(),
             self.diagnostics.clone(),
@@ -216,11 +242,11 @@ impl LanguageServer for Backend {
                     .await;
             }
             Err(error) => {
+                let message = format!(
+                    "Lua language features are unavailable; native CEA features remain active: {error}"
+                );
                 self.client
-                    .log_message(
-                        MessageType::WARNING,
-                        format!("Lua language features are unavailable: {error}"),
-                    )
+                    .show_message(MessageType::WARNING, message)
                     .await;
             }
         }
@@ -259,7 +285,27 @@ impl LanguageServer for Backend {
             .write()
             .await
             .remove(&params.text_document.uri);
-        self.symbols.write().await.remove(&params.text_document.uri);
+        let folders = self.workspace_folders.read().await;
+        let disk_document = workspace::belongs_to(&params.text_document.uri, &folders)
+            .then(|| workspace::load(&params.text_document.uri))
+            .flatten();
+        drop(folders);
+        if let Some(document) = disk_document {
+            self.symbols
+                .write()
+                .await
+                .update(params.text_document.uri.clone(), document.symbol_index());
+            self.disk_documents
+                .write()
+                .await
+                .insert(params.text_document.uri.clone(), document);
+        } else {
+            self.symbols.write().await.remove(&params.text_document.uri);
+            self.disk_documents
+                .write()
+                .await
+                .remove(&params.text_document.uri);
+        }
         self.refresh_cea_diagnostics().await;
         self.diagnostics.clear(params.text_document.uri).await;
     }
@@ -283,9 +329,55 @@ impl LanguageServer for Backend {
                 }
             }
         }
+        let folders = self.workspace_folders.read().await.clone();
+        let discovered = workspace::discover(&folders);
+        let open = self.documents.read().await;
+        let mut disk_documents = self.disk_documents.write().await;
+        let mut symbols = self.symbols.write().await;
+        let previous_uris: Vec<_> = disk_documents.keys().cloned().collect();
+        for uri in previous_uris {
+            if !workspace::belongs_to(&uri, &folders) {
+                disk_documents.remove(&uri);
+                if !open.contains_key(&uri) {
+                    symbols.remove(&uri);
+                }
+            }
+        }
+        for (uri, document) in discovered {
+            if !open.contains_key(&uri) {
+                symbols.update(uri.clone(), document.symbol_index());
+            }
+            disk_documents.insert(uri, document);
+        }
+        drop(symbols);
+        drop(disk_documents);
+        drop(open);
+        self.refresh_cea_diagnostics().await;
         if let Some(lua) = self.lua.read().await.as_ref() {
             lua.change_workspace_folders(params.event).await;
         }
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let open = self.documents.read().await;
+        let mut disk_documents = self.disk_documents.write().await;
+        let mut symbols = self.symbols.write().await;
+        for change in params.changes {
+            if open.contains_key(&change.uri) {
+                continue;
+            }
+            if change.typ == FileChangeType::DELETED {
+                disk_documents.remove(&change.uri);
+                symbols.remove(&change.uri);
+            } else if let Some(document) = workspace::load(&change.uri) {
+                symbols.update(change.uri.clone(), document.symbol_index());
+                disk_documents.insert(change.uri, document);
+            }
+        }
+        drop(symbols);
+        drop(disk_documents);
+        drop(open);
+        self.refresh_cea_diagnostics().await;
     }
 
     async fn document_symbol(
@@ -301,7 +393,18 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let source_uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
-        let native_items = self.native_completions().await;
+        let native_items = {
+            let documents = self.documents.read().await;
+            let allowed = documents
+                .get(&source_uri)
+                .is_some_and(|document| document.document.native_completion_allowed(position));
+            drop(documents);
+            if allowed {
+                self.native_completions().await
+            } else {
+                Vec::new()
+            }
+        };
         let response = self
             .lua_request(
                 "textDocument/completion",

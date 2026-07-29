@@ -29,6 +29,8 @@ address:
 dealloc(newmem)
 [module.pointer]+offset:
   db 00
+00400500:
+  db 00
 
 ---
 
@@ -131,6 +133,12 @@ dealloc(newmem)
       name: (identifier)
       (argument_list
         (identifier))))
+  (address_definition_line
+    (address_definition))
+  (operation_line
+    (operation
+      name: (identifier)
+      (number)))
   (address_definition_line
     (address_definition))
   (operation_line

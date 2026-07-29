@@ -172,10 +172,12 @@ impl WorkspaceSymbolIndex {
         }
         for occurrences in declarations.values_mut() {
             occurrences.sort_by(|left, right| {
-                left.uri
-                    .as_str()
-                    .cmp(right.uri.as_str())
-                    .then_with(|| left.occurrence.range.start.cmp(&right.occurrence.range.start))
+                left.uri.as_str().cmp(right.uri.as_str()).then_with(|| {
+                    left.occurrence
+                        .range
+                        .start
+                        .cmp(&right.occurrence.range.start)
+                })
             });
             for duplicate in duplicate_declarations(occurrences) {
                 diagnostics
@@ -231,14 +233,16 @@ fn collect_occurrences(node: Node<'_>, source: &str, occurrences: &mut Vec<Symbo
     match node.kind() {
         "label_definition" => {
             if let Some(name) = node.child_by_field_name("name") {
-                push_occurrence(
-                    name,
-                    source,
-                    CeaSymbolKind::Label,
-                    OccurrenceRole::Definition,
-                    false,
-                    occurrences,
-                );
+                if node_text(name, source).is_some_and(is_label_name) {
+                    push_occurrence(
+                        name,
+                        source,
+                        CeaSymbolKind::Label,
+                        OccurrenceRole::Definition,
+                        false,
+                        occurrences,
+                    );
+                }
             }
         }
         "aa_command" => collect_command(node, source, occurrences),
@@ -305,14 +309,16 @@ fn collect_command(node: Node<'_>, source: &str, occurrences: &mut Vec<SymbolOcc
         }
         "label" => {
             for argument in arguments {
-                push_occurrence(
-                    argument,
-                    source,
-                    CeaSymbolKind::Label,
-                    OccurrenceRole::Declaration,
-                    false,
-                    occurrences,
-                );
+                if node_text(argument, source).is_some_and(is_label_name) {
+                    push_occurrence(
+                        argument,
+                        source,
+                        CeaSymbolKind::Label,
+                        OccurrenceRole::Declaration,
+                        false,
+                        occurrences,
+                    );
+                }
             }
         }
         "registersymbol" => {
@@ -514,6 +520,12 @@ fn is_lua_identifier_start(byte: u8) -> bool {
 
 fn is_lua_identifier_continue(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn is_label_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 fn push_occurrence(
@@ -761,5 +773,32 @@ getAddress(\"direct\")
         workspace.update(uri.clone(), index("label(return)\nreturn:\n"));
 
         assert!(workspace.semantic_diagnostics()[&uri].is_empty());
+    }
+
+    #[test]
+    fn indexes_only_symbol_shaped_labels_and_ignores_address_lines() {
+        let index = index(
+            "\
+label(valid_Label2)
+label(_invalid)
+valid_Label2:
+00400500:
+[ptr]:
+",
+        );
+        let labels: Vec<_> = index
+            .occurrences()
+            .iter()
+            .filter(|occurrence| occurrence.kind == CeaSymbolKind::Label)
+            .map(|occurrence| (occurrence.name.as_str(), occurrence.role))
+            .collect();
+
+        assert_eq!(
+            labels,
+            [
+                ("valid_Label2", OccurrenceRole::Declaration),
+                ("valid_Label2", OccurrenceRole::Definition),
+            ]
+        );
     }
 }

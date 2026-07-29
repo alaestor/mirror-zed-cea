@@ -94,7 +94,10 @@ module.exports = grammar({
       seq($.address_definition, optional($.line_comment), $._newline),
 
     address_definition: () =>
-      token(prec(9, /\[[^\r\n]+:/)),
+      token(prec(9, choice(
+        /\[[^\r\n]+:/,
+        /[0-9][0-9A-Fa-f]*:/,
+      ))),
 
     label_definition: ($) =>
       prec(10, seq(field("name", $.identifier), ":")),

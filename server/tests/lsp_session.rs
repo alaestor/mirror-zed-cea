@@ -42,6 +42,26 @@ fn receive_matching(reader: &mut impl BufRead, predicate: impl Fn(&Value) -> boo
     }
 }
 
+fn receive_lua_proxy_initialized(reader: &mut impl BufRead) {
+    loop {
+        let message = receive(reader);
+        if message["method"] == "window/logMessage"
+            && message["params"]["message"] == "Lua language server proxy initialized"
+        {
+            return;
+        }
+        if message["method"] == "window/showMessage"
+            && message["params"]["message"]
+                .as_str()
+                .is_some_and(|message| {
+                    message.starts_with("Lua language features are unavailable;")
+                })
+        {
+            panic!("{}", message["params"]["message"]);
+        }
+    }
+}
+
 fn definition_uri(response: &Value) -> Option<&str> {
     response["result"]
         .get(0)
@@ -173,7 +193,7 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
                     "uri": "file:///consumer.cea",
                     "languageId": "cea",
                     "version": 1,
-                    "text": "[ENABLE]\nregistersymbol(storage)\n{$lua}\nreturn getAddress(\"storage\")\n{$asm}\n"
+                    "text": "[ENABLE]\nregistersymbol(storage)\n{$lua}\nreturn getAddress(\"storage\")\n{$asm}\n[DISABLE]\n"
                 }
             }
         }),
@@ -359,10 +379,7 @@ fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
             "params": {}
         }),
     );
-    receive_matching(&mut stdout, |message| {
-        message["method"] == "window/logMessage"
-            && message["params"]["message"] == "Lua language server proxy initialized"
-    });
+    receive_lua_proxy_initialized(&mut stdout);
 
     send(
         &mut stdin,
@@ -396,6 +413,11 @@ fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
         .as_array()
         .unwrap()
         .iter()
+        .filter(|diagnostic| {
+            diagnostic["source"]
+                .as_str()
+                .is_some_and(|source| source.contains("Lua"))
+        })
         .all(|diagnostic| diagnostic["range"]["start"]["line"] == 1));
 
     send(
@@ -446,7 +468,7 @@ fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
                     "version": 3
                 },
                 "contentChanges": [{
-                    "text": "{$lua}\nlocal proxy_value = 1\nprint(proxy_value)\n{$asm}\n"
+                    "text": "[ENABLE]\n{$lua}\nlocal proxy_value = 1\nprint(proxy_value)\n{$asm}\n[DISABLE]\n"
                 }]
             }
         }),
@@ -467,7 +489,7 @@ fn forwards_embedded_lua_syntax_and_semantic_diagnostics_over_stdio() {
                     "uri": "file:///tmp/cea-lsp-proxy-test/proxy-fixture.cea"
                 },
                 "position": {
-                    "line": 2,
+                    "line": 3,
                     "character": 8
                 }
             }
@@ -587,10 +609,7 @@ fn resolves_definitions_across_workspace_and_lua_path_fixtures() {
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
     );
-    receive_matching(&mut stdout, |message| {
-        message["method"] == "window/logMessage"
-            && message["params"]["message"] == "Lua language server proxy initialized"
-    });
+    receive_lua_proxy_initialized(&mut stdout);
 
     send(
         &mut stdin,
@@ -659,6 +678,453 @@ fn resolves_definitions_across_workspace_and_lua_path_fixtures() {
 }
 
 #[test]
+fn provides_bundled_cheat_engine_api_intelligence() {
+    if !command_exists("lua-language-server") {
+        eprintln!("skipping CE API integration test: lua-language-server is not on PATH");
+        return;
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture_dir = env::temp_dir().join(format!(
+        "cea-api-intelligence-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&fixture_dir).unwrap();
+    let workspace_uri = Url::from_directory_path(&fixture_dir).unwrap().to_string();
+    let document_uri = Url::from_file_path(fixture_dir.join("api.cea"))
+        .unwrap()
+        .to_string();
+    let source = "[ENABLE]\n{$lua}\nlocal address = getAddress(\"player\")\nshowMessage(\"hello\")\nunknownCeGlobal()\n{$asm}\n[DISABLE]\n";
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "capabilities": {},
+                "processId": null,
+                "rootUri": workspace_uri
+            }
+        }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+    receive_lua_proxy_initialized(&mut stdout);
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": document_uri,
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": source
+                }
+            }
+        }),
+    );
+
+    let mut request_id = 9;
+    let definition = await_definition(
+        &mut stdin,
+        &mut stdout,
+        &mut request_id,
+        &document_uri,
+        2,
+        18,
+    );
+    let declaration_uri = definition_uri(&definition).unwrap();
+    assert!(declaration_uri.contains("cheat-engine-api"));
+    assert!(declaration_uri.ends_with("/core.d.lua"));
+
+    for (method, line, character, assertion) in [
+        ("textDocument/hover", 2, 18, "getAddress"),
+        ("textDocument/signatureHelp", 2, 31, "signatures"),
+        ("textDocument/completion", 3, 5, "showMessage"),
+    ] {
+        request_id += 1;
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": {
+                    "textDocument": { "uri": document_uri },
+                    "position": { "line": line, "character": character }
+                }
+            }),
+        );
+        let response = receive_matching(&mut stdout, |message| message["id"] == request_id);
+        if assertion == "signatures" {
+            assert!(!response["result"]["signatures"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+        } else {
+            assert!(
+                response["result"].to_string().contains(assertion),
+                "{method} did not expose {assertion}: {response}"
+            );
+        }
+    }
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": document_uri, "version": 2 },
+                "contentChanges": [{ "text": format!("{source}\n") }]
+            }
+        }),
+    );
+    let diagnostics = receive_matching(&mut stdout, |message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains("unknownCeGlobal"))
+                    })
+                })
+    });
+    let messages = diagnostics["params"]["diagnostics"].to_string();
+    assert!(!messages.contains("getAddress"));
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 30, "method": "shutdown", "params": null }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 30);
+    send(&mut stdin, json!({ "jsonrpc": "2.0", "method": "exit" }));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    fs::remove_dir_all(fixture_dir).unwrap();
+}
+
+#[test]
+fn disabling_bundled_cheat_engine_api_restores_undefined_global_diagnostics() {
+    if !command_exists("lua-language-server") {
+        eprintln!("skipping CE API integration test: lua-language-server is not on PATH");
+        return;
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let document_uri = "file:///tmp/cea-api-disabled.cea";
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "capabilities": {},
+                "processId": null,
+                "rootUri": "file:///tmp",
+                "initializationOptions": {
+                    "cheatEngineApi": { "enabled": false },
+                    "luaLanguageServer": {}
+                }
+            }
+        }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+    receive_lua_proxy_initialized(&mut stdout);
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": document_uri,
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": "[ENABLE]\n{$lua}\ngetAddress(\"player\")\n{$asm}\n[DISABLE]\n"
+                }
+            }
+        }),
+    );
+    let diagnostics = receive_matching(&mut stdout, |message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains("getAddress"))
+                    })
+                })
+    });
+    assert!(diagnostics["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "undefined-global"));
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 2);
+    send(&mut stdin, json!({ "jsonrpc": "2.0", "method": "exit" }));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn indexes_unopened_workspace_files_and_tracks_disk_lifecycle() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture_dir = env::temp_dir().join(format!(
+        "cea-workspace-index-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&fixture_dir).unwrap();
+    let provider_path = fixture_dir.join("provider.cea");
+    let duplicate_path = fixture_dir.join("duplicate.cea");
+    let consumer_path = fixture_dir.join("consumer.cea");
+    fs::write(
+        &provider_path,
+        "[ENABLE]\nalloc(shared,64)\n[DISABLE]\ndealloc(shared)\n",
+    )
+    .unwrap();
+    fs::write(
+        &duplicate_path,
+        "[ENABLE]\nalloc(shared,64)\n[DISABLE]\ndealloc(shared)\n",
+    )
+    .unwrap();
+    fs::write(
+        &consumer_path,
+        "[ENABLE]\njmp shared\nregistersymbol(shared)\n[DISABLE]\n",
+    )
+    .unwrap();
+    let workspace_uri = Url::from_directory_path(&fixture_dir).unwrap().to_string();
+    let provider_uri = Url::from_file_path(&provider_path).unwrap().to_string();
+    let duplicate_uri = Url::from_file_path(&duplicate_path).unwrap().to_string();
+    let consumer_uri = Url::from_file_path(&consumer_path).unwrap().to_string();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
+        .env("CEA_LUA_LANGUAGE_SERVER", "missing-lua-language-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "capabilities": {},
+                "processId": null,
+                "rootUri": workspace_uri
+            }
+        }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+    let duplicate_diagnostics = receive_matching(&mut stdout, |message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains("duplicate"))
+                    })
+                })
+    });
+    assert!(duplicate_diagnostics["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("duplicate"))));
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": consumer_uri,
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": "[ENABLE]\njmp shared\nregistersymbol(shared)\n[DISABLE]\n"
+                }
+            }
+        }),
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": { "uri": consumer_uri },
+                "position": { "line": 1, "character": 6 }
+            }
+        }),
+    );
+    let definitions = receive_matching(&mut stdout, |message| message["id"] == 2);
+    assert_eq!(definitions["result"].as_array().unwrap().len(), 2);
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "textDocument/completion",
+            "params": {
+                "textDocument": { "uri": consumer_uri },
+                "position": { "line": 1, "character": 4 }
+            }
+        }),
+    );
+    let completion = receive_matching(&mut stdout, |message| message["id"] == 3);
+    assert!(completion["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "shared"));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "textDocument/rename",
+            "params": {
+                "textDocument": { "uri": consumer_uri },
+                "position": { "line": 1, "character": 6 },
+                "newName": "renamed"
+            }
+        }),
+    );
+    let rename = receive_matching(&mut stdout, |message| message["id"] == 4);
+    assert!(rename["result"]["changes"].get(&provider_uri).is_some());
+    assert!(rename["result"]["changes"].get(&duplicate_uri).is_some());
+    assert!(rename["result"]["changes"].get(&consumer_uri).is_some());
+
+    fs::remove_file(&duplicate_path).unwrap();
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "workspace/didChangeWatchedFiles",
+            "params": {
+                "changes": [{ "uri": duplicate_uri, "type": 3 }]
+            }
+        }),
+    );
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": { "uri": consumer_uri },
+                "position": { "line": 1, "character": 6 }
+            }
+        }),
+    );
+    let definitions = receive_matching(&mut stdout, |message| message["id"] == 5);
+    assert_eq!(definitions["result"].as_array().unwrap().len(), 1);
+    assert_eq!(definition_uri(&definitions), Some(provider_uri.as_str()));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": provider_uri,
+                    "languageId": "cea",
+                    "version": 1,
+                    "text": "[ENABLE]\nunsaved:\n[DISABLE]\n"
+                }
+            }
+        }),
+    );
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didClose",
+            "params": { "textDocument": { "uri": provider_uri } }
+        }),
+    );
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": { "uri": consumer_uri },
+                "position": { "line": 1, "character": 6 }
+            }
+        }),
+    );
+    let restored = receive_matching(&mut stdout, |message| message["id"] == 6);
+    assert_eq!(definition_uri(&restored), Some(provider_uri.as_str()));
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 7, "method": "shutdown", "params": null }),
+    );
+    receive_matching(&mut stdout, |message| message["id"] == 7);
+    send(&mut stdin, json!({ "jsonrpc": "2.0", "method": "exit" }));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    fs::remove_dir_all(fixture_dir).unwrap();
+}
+
+#[test]
 fn restarts_lua_ls_and_resynchronizes_open_documents() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -671,6 +1137,7 @@ fn restarts_lua_ls_and_resynchronizes_open_documents() {
     let workspace_uri = format!("file://{}", fixture_dir.display());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
+        .env("XDG_CACHE_HOME", fixture_dir.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -705,10 +1172,7 @@ fn restarts_lua_ls_and_resynchronizes_open_documents() {
             "params": {}
         }),
     );
-    receive_matching(&mut stdout, |message| {
-        message["method"] == "window/logMessage"
-            && message["params"]["message"] == "Lua language server proxy initialized"
-    });
+    receive_lua_proxy_initialized(&mut stdout);
 
     send(
         &mut stdin,
@@ -781,6 +1245,7 @@ fn forwards_client_request_cancellation_to_lua_ls() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_cea-language-server"))
         .env("CEA_LUA_LANGUAGE_SERVER", &fake_lua_ls)
+        .env("XDG_CACHE_HOME", fixture_dir.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -810,10 +1275,7 @@ fn forwards_client_request_cancellation_to_lua_ls() {
             "params": {}
         }),
     );
-    receive_matching(&mut stdout, |message| {
-        message["method"] == "window/logMessage"
-            && message["params"]["message"] == "Lua language server proxy initialized"
-    });
+    receive_lua_proxy_initialized(&mut stdout);
 
     send(
         &mut stdin,
