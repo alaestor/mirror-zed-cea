@@ -232,6 +232,12 @@ fn symbol_kind_name(kind: CeaSymbolKind) -> &'static str {
 fn collect_occurrences(node: Node<'_>, source: &str, occurrences: &mut Vec<SymbolOccurrence>) {
     match node.kind() {
         "label_definition" => {
+            if node
+                .parent()
+                .is_none_or(|parent| parent.kind() != "label_definition_line")
+            {
+                return;
+            }
             if let Some(name) = node.child_by_field_name("name") {
                 if node_text(name, source).is_some_and(is_label_name) {
                     push_occurrence(

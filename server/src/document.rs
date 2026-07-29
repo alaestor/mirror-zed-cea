@@ -36,9 +36,16 @@ impl Document {
 
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        let symbol_index = self.symbol_index();
         collect_diagnostics(self.tree.root_node(), &self.source, &mut diagnostics, false);
         collect_structure_diagnostics(self.tree.root_node(), &self.source, &mut diagnostics);
-        collect_strict_diagnostics(&self.source, &self.symbol_index(), &mut diagnostics);
+        collect_label_diagnostics(
+            self.tree.root_node(),
+            &self.source,
+            &symbol_index,
+            &mut diagnostics,
+        );
+        collect_strict_diagnostics(&self.source, &symbol_index, &mut diagnostics);
         diagnostics
     }
 
@@ -267,6 +274,63 @@ fn collect_strict_diagnostics(
     }
 }
 
+fn collect_label_diagnostics(
+    root: Node<'_>,
+    source: &str,
+    index: &DocumentSymbolIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let definitions: HashSet<_> = index
+        .occurrences()
+        .iter()
+        .filter(|occurrence| {
+            occurrence.kind == CeaSymbolKind::Label && occurrence.role == OccurrenceRole::Definition
+        })
+        .map(|occurrence| occurrence.name.to_ascii_lowercase())
+        .collect();
+
+    for declaration in index.occurrences().iter().filter(|occurrence| {
+        occurrence.kind == CeaSymbolKind::Label
+            && occurrence.role == OccurrenceRole::Declaration
+            && !definitions.contains(&occurrence.name.to_ascii_lowercase())
+    }) {
+        diagnostics.push(cea_diagnostic(
+            declaration.range,
+            format!(
+                "label `{}` is declared but never defined in this script",
+                declaration.name
+            ),
+        ));
+    }
+
+    collect_invalid_label_lines(root, source, diagnostics);
+}
+
+fn collect_invalid_label_lines(node: Node<'_>, source: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if node.kind() == "invalid_label_definition_line" {
+        if let Some(definition) = node.named_child(0) {
+            let text = node_text(definition, source).unwrap_or_default();
+            if let Some(label) = text.split(':').next() {
+                diagnostics.push(cea_diagnostic(
+                    node_range(definition, source),
+                    format!(
+                        "label `{label}:` must be on its own line; only a comment may follow it"
+                    ),
+                ));
+            }
+        }
+        return;
+    }
+    if node.kind() == "lua_chunk" {
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_invalid_label_lines(child, source, diagnostics);
+    }
+}
+
 fn collect_nodes<'tree>(
     node: Node<'tree>,
     sections: &mut Vec<Node<'tree>>,
@@ -374,6 +438,12 @@ fn symbol_for_node(node: Node<'_>, source: &str) -> Option<DocumentSymbol> {
             source,
         )),
         "label_definition" => {
+            if node
+                .parent()
+                .is_none_or(|parent| parent.kind() != "label_definition_line")
+            {
+                return None;
+            }
             let name = node.child_by_field_name("name")?;
             Some(symbol(
                 node_text(name, source)?,
@@ -798,6 +868,36 @@ jmp not_a_label_definition
         assert!(!diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("00400500")));
+    }
+
+    #[test]
+    fn diagnoses_labels_that_are_missing_definitions_or_share_code_lines() {
+        let source = "\
+[ENABLE]
+label(missing)
+label(valid)
+valid: // comment
+label(block_comment)
+block_comment: { comment }
+label(invalid)
+invalid: nop
+[DISABLE]
+";
+        let document = Document::parse(source.into()).unwrap();
+        let diagnostics = document.diagnostics();
+
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("label `missing` is declared but never defined")));
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("label `invalid:` must be on its own line")));
+        assert!(!diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("label `valid` is declared but never defined")));
+        assert!(!diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("label `block_comment` is declared but never defined")));
     }
 
     #[test]

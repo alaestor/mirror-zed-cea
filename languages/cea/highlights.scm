@@ -15,6 +15,7 @@
   name: (identifier) @label)
 
 (address_definition) @label
+(invalid_label_definition) @error
 
 (aa_command
   name: (identifier) @function)

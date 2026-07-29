@@ -57,6 +57,7 @@ module.exports = grammar({
         $.line_comment_line,
         $.address_definition_line,
         $.label_definition_line,
+        $.invalid_label_definition_line,
         $.aa_command_line,
         $.operation_line,
         $.empty_line,
@@ -88,7 +89,17 @@ module.exports = grammar({
       token(prec(10, /\/\/[^\r\n]*/)),
 
     label_definition_line: ($) =>
-      seq($.label_definition, optional($.line_comment), $._newline),
+      seq(
+        $.label_definition,
+        optional(choice($.line_comment, $.block_comment)),
+        $._newline,
+      ),
+
+    invalid_label_definition_line: ($) =>
+      seq($.invalid_label_definition, $._newline),
+
+    invalid_label_definition: () =>
+      token(prec(20, /[A-Za-z_?.$][A-Za-z0-9_.$?]*:[ \t]*[^\/{ \t\r\n][^\r\n]*/)),
 
     address_definition_line: ($) =>
       seq($.address_definition, optional($.line_comment), $._newline),

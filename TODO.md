@@ -50,6 +50,8 @@ high-value validation and navigation behavior. In particular:
   a value.
 - [x] Show compact hexadecimal, decimal, and negative signed interpretations
   when hovering integer literals.
+- [x] Diagnose declared labels without definitions and label definitions followed
+  by code on the same line.
 - [ ] Continue auditing Auto Assembler commands beyond the documented
   parenthesized core. Argument validation and scan-result navigation now cover
   AOB scans, allocation variants, memory/file commands, and thread commands;
@@ -61,8 +63,10 @@ Primary references:
 - <https://wiki.cheatengine.org/index.php?title=Cheat_Engine:Auto_Assembler>
 - <https://wiki.cheatengine.org/index.php?title=Auto_Assembler:Commands>
 
-The documentation is incomplete; prefer observed Cheat Engine behavior and
-small regression fixtures when sources disagree.
+The documentation is incomplete; prefer observed current Cheat Engine behavior
+and small regression fixtures when sources disagree. Historical open-source
+Pascal snapshots remain useful implementation references when pinned to an
+exact revision, but are not evidence of current closed-source behavior.
 
 ### Improve Cheat Engine API declarations
 

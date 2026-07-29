@@ -216,3 +216,50 @@ dq (double)100.1
         value: (decimal_value))))
   (section_header_line
     (section_header)))
+
+==================
+Label line rules
+==================
+
+[ENABLE]
+label(valid)
+valid: // line comment
+label(commented)
+commented: { block comment }
+label(invalid)
+invalid: nop
+[DISABLE]
+
+---
+
+(source_file
+  (empty_line)
+  (section_header_line
+    (section_header))
+  (aa_command_line
+    (aa_command
+      (identifier)
+      (argument_list
+        (identifier))))
+  (label_definition_line
+    (label_definition
+      (identifier))
+    (line_comment))
+  (aa_command_line
+    (aa_command
+      (identifier)
+      (argument_list
+        (identifier))))
+  (label_definition_line
+    (label_definition
+      (identifier))
+    (block_comment))
+  (aa_command_line
+    (aa_command
+      (identifier)
+      (argument_list
+        (identifier))))
+  (invalid_label_definition_line
+    (invalid_label_definition))
+  (section_header_line
+    (section_header)))

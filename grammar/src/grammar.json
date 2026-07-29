@@ -246,6 +246,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "invalid_label_definition_line"
+        },
+        {
+          "type": "SYMBOL",
           "name": "aa_command_line"
         },
         {
@@ -369,8 +373,17 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "SYMBOL",
-              "name": "line_comment"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "line_comment"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "block_comment"
+                }
+              ]
             },
             {
               "type": "BLANK"
@@ -382,6 +395,30 @@
           "name": "_newline"
         }
       ]
+    },
+    "invalid_label_definition_line": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "invalid_label_definition"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_newline"
+        }
+      ]
+    },
+    "invalid_label_definition": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 20,
+        "content": {
+          "type": "PATTERN",
+          "value": "[A-Za-z_?.$][A-Za-z0-9_.$?]*:[ \\t]*[^\\/{ \\t\\r\\n][^\\r\\n]*"
+        }
+      }
     },
     "address_definition_line": {
       "type": "SEQ",
