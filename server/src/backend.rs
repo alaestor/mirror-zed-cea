@@ -12,14 +12,15 @@ use tower_lsp::{
         DeclarationCapability, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
         DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
         DocumentHighlight, DocumentHighlightParams, DocumentSymbolParams, DocumentSymbolResponse,
-        FileChangeType, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-        HoverProviderCapability, ImplementationProviderCapability, InitializeParams,
-        InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType,
-        OneOf, PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams,
-        ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
-        TypeDefinitionProviderCapability, Url, WorkDoneProgressOptions, WorkspaceEdit,
-        WorkspaceFolder, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+        FileChangeType, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+        HoverParams, HoverProviderCapability, ImplementationProviderCapability, InitializeParams,
+        InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MarkupContent,
+        MarkupKind, MessageType, OneOf, PrepareRenameResponse, ReferenceParams, RenameOptions,
+        RenameParams, ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions,
+        SignatureHelpParams, TextDocumentPositionParams, TextDocumentSyncCapability,
+        TextDocumentSyncKind, TextEdit, TypeDefinitionProviderCapability, Url,
+        WorkDoneProgressOptions, WorkspaceEdit, WorkspaceFolder,
+        WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
     },
     Client, LanguageServer,
 };
@@ -460,6 +461,21 @@ impl LanguageServer for Backend {
             .uri
             .clone();
         let position = params.text_document_position_params.position;
+        let native = self
+            .documents
+            .read()
+            .await
+            .get(&source_uri)
+            .and_then(|document| document.document.integer_hover(position));
+        if let Some((value, range)) = native {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::PlainText,
+                    value,
+                }),
+                range: Some(range),
+            }));
+        }
         self.lua_request("textDocument/hover", &source_uri, Some(position), params)
             .await
     }

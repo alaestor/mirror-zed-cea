@@ -6,6 +6,7 @@ Zed language support for Cheat Engine Auto Assembler (`.cea`) scripts with embed
 
 - Error-tolerant Tree-sitter parsing and highlighting for Auto Assembler, x86/x64 operations, sections, directives, and embedded Lua
 - Document symbols and workspace-wide completion, definitions, references, highlights, and rename across open and unopened `.cea` files
+- Compact hexadecimal, decimal, and signed conversion hovers for integer literals
 - Diagnostics for malformed structure, missing or invalid enable/disable sections, `{$STRICT}` label ordering, invalid command arguments, duplicate declarations, and unresolved explicit symbol references
 - Embedded Lua diagnostics, completion, hover, signature help, navigation, rename, code actions, and inlay hints through a managed `lua-language-server`
 - Bundled, versioned Cheat Engine 7.7 Lua API declarations for CE globals, memory, address-list, Mono, and UI APIs

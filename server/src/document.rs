@@ -52,6 +52,18 @@ impl Document {
         DocumentSymbolIndex::build(self.tree.root_node(), &self.source)
     }
 
+    pub fn integer_hover(&self, position: Position) -> Option<(String, Range)> {
+        let byte = byte_offset_at_position(&self.source, position)?;
+        let end = (byte + 1).min(self.source.len());
+        let mut node = self.tree.root_node().descendant_for_byte_range(byte, end)?;
+        while !matches!(node.kind(), "number" | "typed_number") {
+            node = node.parent()?;
+        }
+
+        let text = node_text(node, &self.source)?;
+        integer_conversion(text).map(|hover| (hover, node_range(node, &self.source)))
+    }
+
     pub fn lua_virtual_document(&self) -> LuaVirtualDocument {
         let mut byte_ranges = Vec::new();
         collect_lua_chunks(self.tree.root_node(), &mut byte_ranges);
@@ -438,6 +450,79 @@ fn lsp_position(source: &str, point: Point) -> Position {
     Position::new(point.row as u32, prefix.encode_utf16().count() as u32)
 }
 
+fn byte_offset_at_position(source: &str, position: Position) -> Option<usize> {
+    let line_start = source
+        .split_inclusive('\n')
+        .take(position.line as usize)
+        .map(str::len)
+        .sum::<usize>();
+    let line = source.get(line_start..)?.split('\n').next()?;
+    let mut utf16 = 0_u32;
+    for (byte, character) in line.char_indices() {
+        if utf16 == position.character {
+            return Some(line_start + byte);
+        }
+        utf16 += character.len_utf16() as u32;
+        if utf16 > position.character {
+            return None;
+        }
+    }
+    (utf16 == position.character).then_some(line_start + line.len())
+}
+
+fn integer_conversion(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    if lower.starts_with("(float)") || lower.starts_with("(double)") {
+        return None;
+    }
+
+    if let Some(decimal) = lower.strip_prefix("(int)") {
+        return signed_decimal_conversion(decimal);
+    }
+    if let Some(decimal) = text.strip_prefix('#') {
+        if decimal.starts_with(['+', '-']) {
+            return signed_decimal_conversion(decimal);
+        }
+        let value = decimal.parse::<u64>().ok()?;
+        return Some(unsigned_conversion(value, format!("{value:X}").len()));
+    }
+
+    let digits = text
+        .strip_prefix('$')
+        .or_else(|| text.strip_prefix("0x"))
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text);
+    let value = u64::from_str_radix(digits, 16).ok()?;
+    Some(unsigned_conversion(value, digits.len()))
+}
+
+fn signed_decimal_conversion(decimal: &str) -> Option<String> {
+    let value = decimal.parse::<i64>().ok()?;
+    let sign = if value < 0 { "-" } else { "" };
+    let magnitude = value.unsigned_abs();
+    Some(format!("{sign}0x{magnitude:X}\n{sign}0d{magnitude}"))
+}
+
+fn unsigned_conversion(value: u64, hexadecimal_digits: usize) -> String {
+    let mut hover = format!("0x{value:X}\n0d{value}");
+    let width = match hexadecimal_digits {
+        0..=2 => 8,
+        3..=4 => 16,
+        5..=8 => 32,
+        _ => 64,
+    };
+    let sign_bit = 1_u64 << (width - 1);
+    if value & sign_bit != 0 {
+        let signed = if width == 64 {
+            value as i64 as i128
+        } else {
+            value as i128 - (1_i128 << width)
+        };
+        hover.push_str(&format!("\n{signed}"));
+    }
+    hover
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +715,41 @@ dd (float)
         assert!(diagnostics.iter().any(|diagnostic| diagnostic
             .message
             .contains("`(float)` must be followed by a decimal value")));
+    }
+
+    #[test]
+    fn converts_integer_literals_for_hover() {
+        let document = Document::parse(
+            "\
+[ENABLE]
+dd $FFFFFFFF
+dd #4294967295
+dd 10
+dd (int)-1
+dd (float)1.0
+[DISABLE]
+"
+            .into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            document.integer_hover(Position::new(1, 5)).unwrap().0,
+            "0xFFFFFFFF\n0d4294967295\n-1"
+        );
+        assert_eq!(
+            document.integer_hover(Position::new(2, 5)).unwrap().0,
+            "0xFFFFFFFF\n0d4294967295\n-1"
+        );
+        assert_eq!(
+            document.integer_hover(Position::new(3, 4)).unwrap().0,
+            "0x10\n0d16"
+        );
+        assert_eq!(
+            document.integer_hover(Position::new(4, 9)).unwrap().0,
+            "-0x1\n-0d1"
+        );
+        assert!(document.integer_hover(Position::new(5, 11)).is_none());
     }
 
     #[test]

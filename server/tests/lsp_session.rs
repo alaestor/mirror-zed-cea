@@ -240,6 +240,27 @@ fn serves_diagnostics_and_document_symbols_over_stdio() {
         json!({
             "jsonrpc": "2.0",
             "id": 3,
+            "method": "textDocument/hover",
+            "params": {
+                "textDocument": {
+                    "uri": "file:///fixture.cea"
+                },
+                "position": {
+                    "line": 1,
+                    "character": 15
+                }
+            }
+        }),
+    );
+    let hover = receive_matching(&mut stdout, |message| message["id"] == 3);
+    assert_eq!(hover["result"]["contents"]["kind"], "plaintext");
+    assert_eq!(hover["result"]["contents"]["value"], "0x10\n0d16");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
             "method": "textDocument/completion",
             "params": {
                 "textDocument": { "uri": "file:///fixture.cea" },

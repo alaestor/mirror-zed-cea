@@ -48,6 +48,8 @@ high-value validation and navigation behavior. In particular:
 - [x] Parse and highlight documented decimal (`#100`), integer (`(int)100`),
   float, double, and scientific value notation; diagnose typed notation without
   a value.
+- [x] Show compact hexadecimal, decimal, and negative signed interpretations
+  when hovering integer literals.
 - [ ] Continue auditing Auto Assembler commands beyond the documented
   parenthesized core. Argument validation and scan-result navigation now cover
   AOB scans, allocation variants, memory/file commands, and thread commands;
