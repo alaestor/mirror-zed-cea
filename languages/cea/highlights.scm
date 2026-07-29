@@ -24,6 +24,7 @@
 
 (register) @variable.special
 (number) @number
+(decimal_value) @number
 (type_cast) @type
 
 [

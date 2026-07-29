@@ -86,6 +86,10 @@
         {
           "type": "type_cast",
           "named": true
+        },
+        {
+          "type": "typed_number",
+          "named": true
         }
       ]
     }
@@ -351,6 +355,10 @@
         {
           "type": "type_cast",
           "named": true
+        },
+        {
+          "type": "typed_number",
+          "named": true
         }
       ]
     }
@@ -446,6 +454,32 @@
     }
   },
   {
+    "type": "typed_number",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "decimal_value",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "type_cast",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "unknown_line",
     "named": true,
     "fields": {}
@@ -500,6 +534,10 @@
   },
   {
     "type": "compiler_directive",
+    "named": true
+  },
+  {
+    "type": "decimal_value",
     "named": true
   },
   {

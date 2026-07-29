@@ -168,13 +168,15 @@ fn collect_structure_diagnostics(root: Node<'_>, source: &str, diagnostics: &mut
             .to_ascii_lowercase();
         let count = argument_count(command, source);
         let valid = match name.as_str() {
-            "alloc" => (2..=3).contains(&count),
-            "globalalloc" => count == 2,
+            "alloc" | "allocnx" | "allocxo" | "globalalloc" => (2..=3).contains(&count),
+            "kalloc" => count == 2,
             "define" | "aobscan" | "assert" => count == 2,
             "aobscanmodule" => count == 3,
-            "dealloc" | "createthread" => count == 1,
+            "aobscanregion" => count == 4,
+            "dealloc" | "createthread" | "include" | "loadlibrary" | "reassemble" => count == 1,
+            "createthreadandwait" => (1..=2).contains(&count),
             "label" | "registersymbol" | "unregistersymbol" => count >= 1,
-            "fullaccess" => (1..=2).contains(&count),
+            "fullaccess" | "loadbinary" | "readmem" => count == 2,
             _ => true,
         };
         if !valid {
@@ -186,6 +188,39 @@ fn collect_structure_diagnostics(root: Node<'_>, source: &str, diagnostics: &mut
                 ),
             ));
         }
+    }
+
+    collect_value_notation_diagnostics(root, source, diagnostics);
+}
+
+fn collect_value_notation_diagnostics(
+    node: Node<'_>,
+    source: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if node.kind() == "type_cast"
+        && node
+            .parent()
+            .is_none_or(|parent| parent.kind() != "typed_number")
+        && node_text(node, source).is_some_and(|cast| {
+            matches!(
+                cast.to_ascii_lowercase().as_str(),
+                "(int)" | "(float)" | "(double)"
+            )
+        })
+    {
+        diagnostics.push(cea_diagnostic(
+            node_range(node, source),
+            format!(
+                "invalid value notation: `{}` must be followed by a decimal value",
+                node_text(node, source).unwrap_or_default()
+            ),
+        ));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_value_notation_diagnostics(child, source, diagnostics);
     }
 }
 
@@ -340,8 +375,8 @@ fn symbol_for_node(node: Node<'_>, source: &str) -> Option<DocumentSymbol> {
             let name = node.child_by_field_name("name")?;
             let command = node_text(name, source)?;
             let kind = match command.to_ascii_lowercase().as_str() {
-                "alloc" | "globalalloc" => SymbolKind::VARIABLE,
-                "define" => SymbolKind::CONSTANT,
+                "alloc" | "allocnx" | "allocxo" | "globalalloc" | "kalloc" => SymbolKind::VARIABLE,
+                "define" | "aobscan" | "aobscanmodule" | "aobscanregion" => SymbolKind::CONSTANT,
                 _ => return None,
             };
             let display_name = first_argument(node, source)
@@ -531,6 +566,70 @@ define(value)
         assert!(messages.contains(&"invalid arguments for `define`: received 1"));
         assert!(!messages.contains(&"missing required [ENABLE] section"));
         assert!(!messages.contains(&"missing required [DISABLE] section"));
+    }
+
+    #[test]
+    fn validates_documented_command_argument_counts() {
+        let source = "\
+[ENABLE]
+aobscanregion(result,start,stop)
+globalalloc(storage)
+kalloc(kernelstorage)
+fullaccess(storage)
+createthreadandwait(worker,1000,extra)
+loadbinary(storage)
+readmem(storage)
+[DISABLE]
+";
+        let document = Document::parse(source.into()).unwrap();
+        let messages: Vec<_> = document
+            .diagnostics()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect();
+
+        for command in [
+            "aobscanregion",
+            "globalalloc",
+            "kalloc",
+            "fullaccess",
+            "createthreadandwait",
+            "loadbinary",
+            "readmem",
+        ] {
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.contains(&format!("`{command}`"))),
+                "missing diagnostic for {command}: {messages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_documented_value_notation_and_rejects_missing_values() {
+        let source = "\
+[ENABLE]
+define(decimal,#100)
+define(whole,(int)-100)
+define(single,(float)100.1)
+define(scientific,(double)-1.25e+2)
+dd (float)
+[DISABLE]
+";
+        let document = Document::parse(source.into()).unwrap();
+        let diagnostics = document.diagnostics();
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.message.contains("invalid value notation"))
+                .count(),
+            1
+        );
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("`(float)` must be followed by a decimal value")));
     }
 
     #[test]

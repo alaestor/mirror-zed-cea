@@ -271,7 +271,7 @@ fn collect_command(node: Node<'_>, source: &str, occurrences: &mut Vec<SymbolOcc
     let normalized = command.to_ascii_lowercase();
 
     match normalized.as_str() {
-        "alloc" | "globalalloc" => {
+        "alloc" | "allocnx" | "allocxo" | "globalalloc" | "kalloc" => {
             if let Some(first) = arguments.first().copied() {
                 push_occurrence(
                     first,
@@ -290,6 +290,24 @@ fn collect_command(node: Node<'_>, source: &str, occurrences: &mut Vec<SymbolOcc
             );
         }
         "define" => {
+            if let Some(first) = arguments.first().copied() {
+                push_occurrence(
+                    first,
+                    source,
+                    CeaSymbolKind::Definition,
+                    OccurrenceRole::Declaration,
+                    false,
+                    occurrences,
+                );
+            }
+            collect_identifier_references(
+                &arguments[arguments.len().min(1)..],
+                source,
+                false,
+                occurrences,
+            );
+        }
+        "aobscan" | "aobscanmodule" | "aobscanregion" => {
             if let Some(first) = arguments.first().copied() {
                 push_occurrence(
                     first,
@@ -669,6 +687,25 @@ dealloc(storage)
             OccurrenceRole::Reference,
             true
         )));
+    }
+
+    #[test]
+    fn indexes_aob_scan_results_as_declarations() {
+        let index = index(
+            "\
+aobscan(first,48 8B ??)
+aobscanmodule(second,game.exe,48 8B ??)
+aobscanregion(third,start,stop,48 8B ??)
+",
+        );
+        let declarations: Vec<_> = index
+            .occurrences()
+            .iter()
+            .filter(|occurrence| occurrence.role == OccurrenceRole::Declaration)
+            .map(|occurrence| occurrence.name.as_str())
+            .collect();
+
+        assert_eq!(declarations, ["first", "second", "third"]);
     }
 
     #[test]

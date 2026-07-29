@@ -145,3 +145,74 @@ dealloc(newmem)
     (operation
       name: (identifier)
       (number))))
+
+==================
+CEA value notation
+==================
+
+[ENABLE]
+define(decimal,#100)
+define(whole,(int)-100)
+define(single,(float)100.1)
+define(scientific,(double)-1.25e+2)
+mov eax,#100
+dd (float).5
+dq (double)100.1
+[DISABLE]
+
+---
+
+(source_file
+  (empty_line)
+  (section_header_line
+    (section_header))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier)
+        (number))))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier)
+        (typed_number
+          (type_cast)
+          value: (decimal_value)))))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (register)
+        (identifier)
+        (typed_number
+          (type_cast)
+          value: (decimal_value)))))
+  (aa_command_line
+    (aa_command
+      name: (identifier)
+      (argument_list
+        (identifier)
+        (typed_number
+          (type_cast)
+          value: (decimal_value)))))
+  (operation_line
+    (operation
+      name: (identifier)
+      (register)
+      (number)))
+  (operation_line
+    (operation
+      name: (identifier)
+      (typed_number
+        (type_cast)
+        value: (decimal_value))))
+  (operation_line
+    (operation
+      name: (identifier)
+      (typed_number
+        (type_cast)
+        value: (decimal_value))))
+  (section_header_line
+    (section_header)))

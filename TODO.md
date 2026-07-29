@@ -45,11 +45,13 @@ process.
 Use the Cheat Engine Auto Assembler documentation and real scripts to identify
 high-value validation and navigation behavior. In particular:
 
-- [ ] Model script assignment to cheat tables where it affects valid section
-  structure or symbol visibility.
-- [ ] Expand value-notation parsing and diagnostics.
-- [ ] Audit Auto Assembler commands for missing argument validation, symbol
-  declarations, and references.
+- [x] Parse and highlight documented decimal (`#100`), integer (`(int)100`),
+  float, double, and scientific value notation; diagnose typed notation without
+  a value.
+- [ ] Continue auditing Auto Assembler commands beyond the documented
+  parenthesized core. Argument validation and scan-result navigation now cover
+  AOB scans, allocation variants, memory/file commands, and thread commands;
+  structure blocks and newer source-only commands remain to be investigated.
 - [ ] Add corpus and language-server tests with every new rule.
 
 Primary references:

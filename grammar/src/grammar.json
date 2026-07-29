@@ -576,6 +576,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "typed_number"
+        },
+        {
+          "type": "SYMBOL",
           "name": "number"
         },
         {
@@ -638,6 +642,10 @@
           "members": [
             {
               "type": "PATTERN",
+              "value": "#[+-]?[0-9]+"
+            },
+            {
+              "type": "PATTERN",
               "value": "\\$[0-9A-Fa-f]+"
             },
             {
@@ -652,6 +660,38 @@
         }
       }
     },
+    "typed_number": {
+      "type": "PREC",
+      "value": 8,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "SYMBOL",
+            "name": "type_cast"
+          },
+          {
+            "type": "FIELD",
+            "name": "value",
+            "content": {
+              "type": "SYMBOL",
+              "name": "decimal_value"
+            }
+          }
+        ]
+      }
+    },
+    "decimal_value": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 7,
+        "content": {
+          "type": "PATTERN",
+          "value": "[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+        }
+      }
+    },
     "type_cast": {
       "type": "TOKEN",
       "content": {
@@ -659,7 +699,8 @@
         "value": 6,
         "content": {
           "type": "PATTERN",
-          "value": "\\((?:byte|word|dword|qword|float|double)\\)"
+          "value": "\\((?:byte|word|dword|qword|int|float|double)\\)",
+          "flags": "i"
         }
       }
     },

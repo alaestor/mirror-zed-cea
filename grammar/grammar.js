@@ -143,6 +143,7 @@ module.exports = grammar({
     _atom: ($) =>
       choice(
         $.register,
+        $.typed_number,
         $.number,
         $.type_cast,
         $.identifier,
@@ -160,13 +161,20 @@ module.exports = grammar({
 
     number: () =>
       token(prec(6, choice(
+        /#[+-]?[0-9]+/,
         /\$[0-9A-Fa-f]+/,
         /0[xX][0-9A-Fa-f]+/,
         /[0-9][0-9A-Fa-f]*/,
       ))),
 
+    typed_number: ($) =>
+      prec(8, seq($.type_cast, field("value", $.decimal_value))),
+
+    decimal_value: () =>
+      token(prec(7, /[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/)),
+
     type_cast: () =>
-      token(prec(6, /\((?:byte|word|dword|qword|float|double)\)/)),
+      token(prec(6, /\((?:byte|word|dword|qword|int|float|double)\)/i)),
 
     identifier: () =>
       token(prec(1, /[A-Za-z_?.$][A-Za-z0-9_.$?]*/)),
