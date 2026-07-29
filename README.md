@@ -9,7 +9,7 @@ Zed language support for Cheat Engine Auto Assembler (`.cea`) scripts with embed
 - Compact hexadecimal, decimal, and signed conversion hovers for integer literals
 - Diagnostics for malformed structure, missing or invalid enable/disable sections, missing or non-exclusive label definitions, `{$STRICT}` label ordering, invalid command arguments, duplicate declarations, and unresolved explicit symbol references
 - Embedded Lua diagnostics, completion, hover, signature help, navigation, rename, code actions, and inlay hints through a managed `lua-language-server`
-- Bundled, versioned Cheat Engine 7.7 Lua API declarations for CE globals, memory, address-list, Mono, and UI APIs
+- Bundled, versioned Cheat Engine 7.7 Lua API declarations for CE globals, memory, address-list, Mono, UI, structure-dissection, and Auto Assembler APIs
 - Cross-language navigation from direct Lua calls such as `getAddress("playerHealth")`
 
 Semantic tokens and assembly language-server integration are not supported.

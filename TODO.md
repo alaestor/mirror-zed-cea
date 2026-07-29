@@ -30,7 +30,7 @@ The project currently provides:
   multiple workspace folders;
 - cross-language navigation from direct Lua address API calls to CEA symbols;
 - bundled, versioned Cheat Engine 7.7 LuaLS declarations for common globals,
-  memory, address-list, Mono, UI, and Auto Assembler APIs;
+  memory, address-list, Mono, UI, structure-dissection, and Auto Assembler APIs;
 - standalone Nix packages for the server and grammar; and
 - unit, Tree-sitter corpus, and stdio integration coverage.
 
@@ -58,7 +58,7 @@ high-value validation and navigation behavior. In particular:
   structure blocks and newer source-only commands remain to be investigated.
 - [ ] Add corpus and language-server tests with every new rule.
 
-Primary references:
+Primary remote references:
 
 - <https://wiki.cheatengine.org/index.php?title=Cheat_Engine:Auto_Assembler>
 - <https://wiki.cheatengine.org/index.php?title=Auto_Assembler:Commands>
@@ -67,6 +67,10 @@ The documentation is incomplete; prefer observed current Cheat Engine behavior
 and small regression fixtures when sources disagree. Historical open-source
 Pascal snapshots remain useful implementation references when pinned to an
 exact revision, but are not evidence of current closed-source behavior.
+
+Local reference material, including the last available source snapshot and
+files from the current release, is available in the ignored `__reference/`
+folder.
 
 ### Improve Cheat Engine API declarations
 
@@ -80,7 +84,7 @@ exact revision, but are not evidence of current closed-source behavior.
 
 ### Reliability and maintenance
 
-- [ ] Remove the declaration snapshot cache-install race that can produce
+- [x] Remove the declaration snapshot cache-install race that can produce
   `Directory not empty` when multiple language-server integration tests start
   concurrently.
 - [ ] Keep the README feature list, configuration schema, bundled declaration
