@@ -1,6 +1,6 @@
 id = "cea"
 name = "Cheat Engine Auto Assembler"
-description = "Syntax highlighting for Cheat Engine Auto Assembler scripts with embedded Lua"
+description = "Language support for Cheat Engine Auto Assembler scripts with embedded Lua"
 version = "0.2.0"
 schema_version = 1
 authors = ["alaestor"]

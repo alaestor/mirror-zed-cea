@@ -34,63 +34,20 @@ The project currently provides:
 - standalone Nix packages for the server and grammar; and
 - unit, Tree-sitter corpus, and stdio integration coverage.
 
-Semantic tokens and assembly language-server integration are not implemented.
-Unsaved standalone `.lua` buffers are not synchronized into the managed LuaLS
-process.
-
-## Active work
-
-### Expand CEA-specific semantics
-
-Use the Cheat Engine Auto Assembler documentation and real scripts to identify
-high-value validation and navigation behavior. In particular:
-
-- [x] Parse and highlight documented decimal (`#100`), integer (`(int)100`),
-  float, double, and scientific value notation; diagnose typed notation without
-  a value.
-- [x] Show compact hexadecimal, decimal, and negative signed interpretations
-  when hovering integer literals.
-- [x] Diagnose declared labels without definitions and label definitions followed
-  by code on the same line.
-- [ ] Continue auditing Auto Assembler commands beyond the documented
-  parenthesized core. Argument validation and scan-result navigation now cover
-  AOB scans, allocation variants, memory/file commands, and thread commands;
-  structure blocks and newer source-only commands remain to be investigated.
-- [ ] Add corpus and language-server tests with every new rule.
-
-Primary remote references:
-
-- <https://wiki.cheatengine.org/index.php?title=Cheat_Engine:Auto_Assembler>
-- <https://wiki.cheatengine.org/index.php?title=Auto_Assembler:Commands>
-
-The documentation is incomplete; prefer observed current Cheat Engine behavior
-and small regression fixtures when sources disagree. Historical open-source
-Pascal snapshots remain useful implementation references when pinned to an
-exact revision, but are not evidence of current closed-source behavior.
+## Left to do
 
 Local reference material, including the last available source snapshot and
 files from the current release, is available in the ignored `__reference/`
 folder.
-
-### Improve Cheat Engine API declarations
 
 - [ ] Continue auditing the 7.7 declarations against `celua.txt` and practical
   scripts, adding useful types, overloads, constants, and documentation.
 - [ ] Decide whether conceptual types such as `Address` and `SymbolName` are
   better represented as strict `---@class` types or aliases. Preserve the
   current classes unless an experiment shows aliases retain useful diagnostics.
-- [ ] Add another CE version only when there is reference material and a real
-  compatibility need; keep snapshots complete and independently selectable.
-
-### Reliability and maintenance
-
-- [x] Remove the declaration snapshot cache-install race that can produce
-  `Directory not empty` when multiple language-server integration tests start
-  concurrently.
-- [ ] Keep the README feature list, configuration schema, bundled declaration
-  coverage, and actual capabilities synchronized.
-- [ ] Revisit exclusions and workspace indexing limits as larger real-world
-  projects expose performance problems.
+- [ ] Model `STRUCT`/`ENDSTRUCT` only with dedicated grammar and current
+  behavioral fixtures; runtime-registered and uncertain source-only commands
+  remain intentionally open ended.
 
 ## Deferred until evidence justifies them
 
@@ -100,11 +57,11 @@ folder.
   and forwarding requires correct legend negotiation or translation.
 - Synchronizing unsaved standalone `.lua` buffers between the editor's LuaLS
   and the managed LuaLS process.
-- Assembly language-server integration.
+- Assembly language-server integration for `{$asm}` (the default AA grammar)
+- C language-server integration for `{$ccode}`
 - Splitting the repository or release cycle.
 - Generated or shared declaration overlays across CE versions.
-
-These are not release blockers for the current product.
+- Improved performance for very large projects.
 
 ## Validation
 
