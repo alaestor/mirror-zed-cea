@@ -103,9 +103,28 @@ fn materialize_at(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let temporary = parent.join(format!(".{}-{hash:016x}-{nonce}.tmp", snapshot.version));
-    fs::create_dir(&temporary)
-        .map_err(|error| format!("failed to create temporary CE API directory: {error}"))?;
+    // A timestamp alone can collide when several installers start in the same
+    // clock tick. Reserve the directory by creating it, and retry if another
+    // installer happened to choose the same name.
+    let mut temporary = parent.join(format!(".{}-{hash:016x}-{nonce}.tmp", snapshot.version));
+    let mut attempt = 0_u32;
+    loop {
+        match fs::create_dir(&temporary) {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt += 1;
+                temporary = parent.join(format!(
+                    ".{}-{hash:016x}-{nonce}-{attempt}.tmp",
+                    snapshot.version
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to create temporary CE API directory: {error}"
+                ));
+            }
+        }
+    }
     for (name, content) in snapshot.files {
         if let Err(error) = fs::write(temporary.join(name), content) {
             let _ = fs::remove_dir_all(&temporary);
