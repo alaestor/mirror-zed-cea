@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.0] - 2026-07-30
+
+### 🚀 Features
+
+- *(server)* Complete priority language tooling
+- *(cea)* Expand value and command semantics
+- *(cea)* Add integer conversion hovers
+- *(cea)* Diagnose incomplete label definitions
+- *(api)* Declare structure dissection APIs
+- *(lsp)* Aobscanex
+
+### 🐛 Bug Fixes
+
+- *(server)* Tolerate concurrent API cache installs
+
+### 📚 Documentation
+
+- Fix callout/admotion formatting
+- *(todo)* Rewrite to reflect current state
+- *(todo)* Rewrite to reflect current state
+- Document CE references
+- CE API explainer
+- *(todo)* Record API and cache progress
+- Document limitations, restructure, cleanup
+
+### 🧪 Testing
+
+- *(server)* Await LuaLS workspace indexing
+
 ## [0.2.0] - 2026-07-28
 
 ### 🚀 Features

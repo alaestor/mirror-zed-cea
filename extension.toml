@@ -1,14 +1,14 @@
 id = "cea"
 name = "Cheat Engine Auto Assembler"
 description = "Language support for Cheat Engine Auto Assembler scripts with embedded Lua"
-version = "0.2.0"
+version = "0.3.0"
 schema_version = 1
 authors = ["alaestor"]
 repository = "https://codeberg.org/alaestor/zed-cea"
 
 [grammars.cea]
 repository = "https://codeberg.org/alaestor/zed-cea.git"
-commit = "ebacc60eecf72195a40c716c54436b3309779f6e"
+commit = "a5d3d8cb230b38c60a12c1fa65b669003f5e7fd9"
 path = "grammar"
 
 [language_servers.cea-language-server]
