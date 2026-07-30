@@ -189,7 +189,7 @@ fn collect_structure_diagnostics(root: Node<'_>, source: &str, diagnostics: &mut
         let valid = match name.as_str() {
             "alloc" | "allocnx" | "allocxo" | "globalalloc" => (2..=3).contains(&count),
             "kalloc" => count == 2,
-            "define" | "aobscan" | "assert" => count == 2,
+            "define" | "aobscan" | "aobscanex" | "assert" => count == 2,
             "aobscanmodule" => count == 3,
             "aobscanregion" => count == 4,
             "dealloc" | "createthread" | "include" | "loadlibrary" | "reassemble" => count == 1,
@@ -458,7 +458,9 @@ fn symbol_for_node(node: Node<'_>, source: &str) -> Option<DocumentSymbol> {
             let command = node_text(name, source)?;
             let kind = match command.to_ascii_lowercase().as_str() {
                 "alloc" | "allocnx" | "allocxo" | "globalalloc" | "kalloc" => SymbolKind::VARIABLE,
-                "define" | "aobscan" | "aobscanmodule" | "aobscanregion" => SymbolKind::CONSTANT,
+                "define" | "aobscan" | "aobscanex" | "aobscanmodule" | "aobscanregion" => {
+                    SymbolKind::CONSTANT
+                }
                 _ => return None,
             };
             let display_name = first_argument(node, source)
@@ -728,6 +730,7 @@ define(value)
         let source = "\
 [ENABLE]
 aobscanregion(result,start,stop)
+aobscanex(executable)
 globalalloc(storage)
 kalloc(kernelstorage)
 fullaccess(storage)
@@ -745,6 +748,7 @@ readmem(storage)
 
         for command in [
             "aobscanregion",
+            "aobscanex",
             "globalalloc",
             "kalloc",
             "fullaccess",

@@ -313,7 +313,7 @@ fn collect_command(node: Node<'_>, source: &str, occurrences: &mut Vec<SymbolOcc
                 occurrences,
             );
         }
-        "aobscan" | "aobscanmodule" | "aobscanregion" => {
+        "aobscan" | "aobscanex" | "aobscanmodule" | "aobscanregion" => {
             if let Some(first) = arguments.first().copied() {
                 push_occurrence(
                     first,
@@ -700,8 +700,9 @@ dealloc(storage)
         let index = index(
             "\
 aobscan(first,48 8B ??)
-aobscanmodule(second,game.exe,48 8B ??)
-aobscanregion(third,start,stop,48 8B ??)
+aobscanex(second,48 8B ??)
+aobscanmodule(third,game.exe,48 8B ??)
+aobscanregion(fourth,start,stop,48 8B ??)
 ",
         );
         let declarations: Vec<_> = index
@@ -711,7 +712,7 @@ aobscanregion(third,start,stop,48 8B ??)
             .map(|occurrence| occurrence.name.as_str())
             .collect();
 
-        assert_eq!(declarations, ["first", "second", "third"]);
+        assert_eq!(declarations, ["first", "second", "third", "fourth"]);
     }
 
     #[test]
