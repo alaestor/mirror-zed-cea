@@ -14,6 +14,10 @@
 ---@type Address
 process = 0
 
+---True while Cheat Engine is validating an embedded auto assembler Lua block.
+---@type boolean
+syntaxcheck = false
+
 ---@class StringList
 ---@field Count integer
 ---@field Text string

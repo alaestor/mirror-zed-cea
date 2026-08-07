@@ -255,12 +255,13 @@ fn collect_strict_diagnostics(
     occurrences.sort_by_key(|occurrence| occurrence.range.start);
     let mut declared_labels = HashSet::new();
     for occurrence in occurrences {
-        if occurrence.kind != CeaSymbolKind::Label {
-            continue;
-        }
-        if occurrence.role == OccurrenceRole::Declaration {
+        if matches!(
+            occurrence.role,
+            OccurrenceRole::Declaration | OccurrenceRole::Registration
+        ) {
             declared_labels.insert(occurrence.name.to_ascii_lowercase());
-        } else if occurrence.role == OccurrenceRole::Definition
+        } else if occurrence.kind == CeaSymbolKind::Label
+            && occurrence.role == OccurrenceRole::Definition
             && !declared_labels.contains(&occurrence.name.to_ascii_lowercase())
         {
             diagnostics.push(cea_diagnostic(
@@ -872,6 +873,27 @@ jmp not_a_label_definition
         assert!(!diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("00400500")));
+    }
+
+    #[test]
+    fn strict_accepts_auto_assembler_symbol_declarations_as_labels() {
+        let source = "\
+{$STRICT}
+[ENABLE]
+define(constant, 10)
+constant:
+alloc(storage, 100)
+storage:
+registersymbol(exported)
+exported:
+[DISABLE]
+";
+        let document = Document::parse(source.into()).unwrap();
+
+        assert!(!document
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("requires label")));
     }
 
     #[test]

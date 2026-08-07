@@ -709,10 +709,6 @@ fn merged_lua_configuration(
         ),
     );
 
-    if configuration.runtime_version.is_none() && runtime_paths.is_empty() && libraries.is_empty() {
-        return None;
-    }
-
     let mut runtime = Map::new();
     if let Some(version) = &configuration.runtime_version {
         runtime.insert("version".into(), json!(version));
@@ -728,6 +724,10 @@ fn merged_lua_configuration(
     if !libraries.is_empty() {
         lua.insert("workspace".into(), json!({ "library": libraries }));
     }
+    lua.insert(
+        "diagnostics".into(),
+        json!({ "disable": ["lowercase-global"] }),
+    );
     Some(json!({ "Lua": lua }))
 }
 
@@ -1013,6 +1013,16 @@ mod tests {
     }
 
     #[test]
+    fn disables_lowercase_global_diagnostics() {
+        let merged = merged_lua_configuration(&LuaConfig::default(), &[], None).unwrap();
+
+        assert_eq!(
+            merged["Lua"]["diagnostics"]["disable"],
+            json!(["lowercase-global"])
+        );
+    }
+
+    #[test]
     fn parses_disabled_cheat_engine_api_configuration() {
         let config = LuaConfig::from_initialization_options(Some(json!({
             "cheatEngineApi": { "enabled": false, "version": "7.7" },
@@ -1100,6 +1110,9 @@ mod tests {
                             "/workspace/environment",
                             "/workspace/types"
                         ]
+                    },
+                    "diagnostics": {
+                        "disable": ["lowercase-global"]
                     }
                 }
             })
