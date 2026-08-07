@@ -78,6 +78,8 @@ nix develop -c npm test
 ```
 
 The flake also exposes `tree-sitter-cea`.
+It exposes the LuaLS declarations separately as `cheat-engine-api` for projects
+that analyze ordinary Lua files without CEA's managed LuaLS.
 
 Run `npm run generate` after changing `grammar/grammar.js`.
 

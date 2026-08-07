@@ -39,9 +39,21 @@
             inherit version;
             src = ./grammar;
           };
+          cheatEngineApi = pkgs.stdenvNoCC.mkDerivation {
+            pname = "cheat-engine-api";
+            version = "7.7";
+            src = ./cheat-engine-api/7.7;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out"
+              cp ./*.d.lua "$out/"
+              runHook postInstall
+            '';
+          };
         in
         {
           default = ceaLanguageServer;
+          cheat-engine-api = cheatEngineApi;
           cea-language-server = ceaLanguageServer;
           tree-sitter-cea = treeSitterCea;
         }
